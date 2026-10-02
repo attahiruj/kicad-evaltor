@@ -47,3 +47,4 @@ fp-info-cache
 
 # Scratch output from tools/calibrate_stroke_font.py
 /tools/_output/
+.pypirc
