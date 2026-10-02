@@ -1,8 +1,27 @@
 from dataclasses import dataclass
+import tomllib
+from importlib import metadata
+from pathlib import Path
+
 import pytest
 from kicad_evaltor.checks.base import Check, CheckCategory, CheckParams, CheckResult, TestStatus
 from kicad_evaltor.checks.registry import CheckRegistry, register
 from kicad_evaltor.utils.units import to_mm, to_nm, to_mils, from_mils
+
+
+class TestVersion:
+    def test_version_comes_from_the_installed_distribution(self) -> None:
+        import kicad_evaltor
+
+        assert kicad_evaltor.__version__ == metadata.version("kicad-evaltor")
+
+    def test_version_is_not_written_down_twice(self) -> None:
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
+
+        import kicad_evaltor
+
+        assert kicad_evaltor.__version__ == declared
 
 
 class TestTestStatus:

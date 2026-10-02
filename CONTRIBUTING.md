@@ -10,7 +10,7 @@ schematic reader parses `.kicad_sch` directly, so the test suite runs without
 one.
 
 ```bash
-git clone https://github.com/kicad-evaltor/kicad-evaltor
+git clone https://github.com/attahiruj/kicad-evaltor
 cd kicad-evaltor
 uv sync --extra dev
 ```
@@ -34,6 +34,17 @@ mypy is gated on `src` only. `checks/pcb/` and `schematic/consistency.py` are
 excluded because the PCB checks are not implemented, and `core/context.py` is
 excluded because it calls into `kipy`, which targets a newer KiCad than we run
 against. Both are annotated in `pyproject.toml` with the reason.
+
+## Versioning
+
+The version lives in exactly one place, `project.version` in `pyproject.toml`,
+and the maintainer bumps it. Do not edit the version, add a `v*` tag, or publish
+to PyPI from a pull request. `kicad_evaltor.__version__` is read from the
+installed distribution, and a test fails if it ever disagrees with
+`pyproject.toml`.
+
+If your change needs a release note, add it under `Unreleased` in
+`CHANGELOG.md`.
 
 ## Commit hooks
 

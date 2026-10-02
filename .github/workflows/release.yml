@@ -1,35 +1,88 @@
+# Maintainer-only. Contributors do not release.
+#
+# One-time setup: on PyPI, add a trusted publisher for this repository pointing
+# at this workflow. It authenticates with a short-lived OIDC token, so no API
+# token is needed here. Without that entry every step below passes and only the
+# publish step fails.
+#
+# To release: bump project.version in pyproject.toml, commit, tag v<version>,
+# push the tag. PyPI cannot overwrite a released version and its error does not
+# name the version, so the check below catches it first.
+#
+# Rehearse with the testpypi input from the Actions tab. Upload by hand with
+# `uv build` then
+# `uvx twine upload --repository pypi --config-file .pypirc dist/*` --
+# --config-file is required because twine never reads .pypirc from the project
+# directory, only from your home directory or %APPDATA%.
+
 name: Release
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      testpypi:
+        description: Publish to TestPyPI instead, for rehearsing a release
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   publish:
-    name: Publish to PyPI
+    name: Publish to ${{ inputs.testpypi && 'TestPyPI' || 'PyPI' }}
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/kicad-evaltor
+      url: https://pypi.org/project/kicad-evaltor/${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+
+      - name: Read the project version
+        id: version
+        run: |
+          version="$(uv run --no-project python -c \
+            "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Verify the tag matches the project version
+        if: github.ref_type == 'tag'
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          version="$(uv run --no-project python -c \
-            "import tomllib,sys;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
-          if [ "$tag" != "$version" ]; then
-            echo "Tag $tag does not match pyproject version $version" >&2
+          if [ "$tag" != "${{ steps.version.outputs.version }}" ]; then
+            echo "Tag $tag does not match pyproject version ${{ steps.version.outputs.version }}" >&2
             exit 1
           fi
+
+      # PyPI refuses to overwrite a file, and the error it gives does not name
+      # the version. Catch it here so the failure names the fix.
+      - name: Refuse to republish an existing version
+        shell: bash
+        run: |
+          if [ "${{ inputs.testpypi }}" = "true" ]; then
+            host="https://test.pypi.org"; package="kicad-evaltor"
+          else
+            host="https://pypi.org"; package="kicad-evaltor"
+          fi
+          code="$(curl -sS -o /dev/null -w '%{http_code}' \
+            "$host/pypi/$package/${{ steps.version.outputs.version }}/json")"
+          if [ "$code" = "200" ]; then
+            echo "::error::$package ${{ steps.version.outputs.version }} is already published on $host" >&2
+            echo "Bump project.version in pyproject.toml, then tag v<that version>." >&2
+            exit 1
+          fi
+          echo "$package ${{ steps.version.outputs.version }} is not on $host (HTTP $code)"
+
       - name: Build
         run: uv build
+
       - name: Check metadata
         run: uvx twine check dist/*
+
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: ${{ inputs.testpypi && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}

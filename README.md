@@ -8,7 +8,7 @@ readable — and run them as a test suite.
 Works against **KiCad 10 and later**. It does not need the KiCad IPC API server,
 which KiCad 10 removed.
 
-[![CI](https://github.com/kicad-evaltor/kicad-evaltor/actions/workflows/ci.yml/badge.svg)](https://github.com/kicad-evaltor/kicad-evaltor/actions/workflows/ci.yml)
+[![CI](https://github.com/attahiruj/kicad-evaltor/actions/workflows/ci.yml/badge.svg)](https://github.com/attahiruj/kicad-evaltor/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/kicad-evaltor.svg)](https://pypi.org/project/kicad-evaltor/)
 [![Python](https://img.shields.io/pypi/pyversions/kicad-evaltor.svg)](https://pypi.org/project/kicad-evaltor/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)

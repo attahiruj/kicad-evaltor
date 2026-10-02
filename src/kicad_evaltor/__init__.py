@@ -1,3 +1,5 @@
+from importlib import metadata
+
 from kicad_evaltor.checks import (
     Check,
     CheckCategory,
@@ -40,7 +42,12 @@ from kicad_evaltor.utils import (
     to_nm,
 )
 
-__version__ = "0.1.0"
+# Read from the installed distribution so pyproject.toml stays the only place a
+# version is written down.
+try:
+    __version__ = metadata.version("kicad-evaltor")
+except metadata.PackageNotFoundError:  # not installed, e.g. a bare source tree
+    __version__ = "0.0.0.dev0"
 
 __all__ = [
     "Check",

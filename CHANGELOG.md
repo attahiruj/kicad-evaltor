@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- `__version__` is read from the installed distribution instead of a literal, so
+  it can no longer drift from `project.version`. A test fails on any mismatch.
+- Repository links in the README, changelog, contributing guide and security
+  policy pointed at a repository that does not exist.
+
+### Changed
+
+- The release workflow now refuses to run when the version being tagged is
+  already on the index, instead of failing on PyPI's opaque upload error, and
+  can publish to TestPyPI to rehearse a release.
 
 ## [0.1.0] - 2026-10-02
 
@@ -50,5 +61,5 @@ First public release.
 - KiCad dependencies are not pinned per check version, so ERC and DRC output
   shape can shift between KiCad releases.
 
-[Unreleased]: https://github.com/kicad-evaltor/kicad-evaltor/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/kicad-evaltor/kicad-evaltor/releases/tag/v0.1.0
+[Unreleased]: https://github.com/attahiruj/kicad-evaltor/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/attahiruj/kicad-evaltor/tree/v0.1.0

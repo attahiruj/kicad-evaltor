@@ -14,7 +14,7 @@ This project is pre-release (0.x). Fixes land on the latest release only.
 Please do not open a public issue for a security problem.
 
 Open a private advisory via GitHub's
-[security advisory form](https://github.com/kicad-evaltor/kicad-evaltor/security/advisories/new)
+[security advisory form](https://github.com/attahiruj/kicad-evaltor/security/advisories/new)
 on this repository. Include what you found, the version affected, and how to
 reproduce it. You should get an acknowledgement within a week.
 
