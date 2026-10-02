@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (ruff ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen --extra dev
+      - name: Ruff lint
+        run: uv run ruff check --output-format=github .
+      # Same ruff the pre-commit hook and local `uv run ruff format` use, so a
+      # reformat cannot pass here and fail on someone's machine.
+      - name: Ruff format
+        run: uv run ruff format --check --diff .
+
+  types:
+    name: Types (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen --extra dev
+      # Only `src` is gated. `tests/` installs stand-ins for kipy and
+      # kicad-cli that deliberately do not match the real signatures, so a
+      # clean run there would mean weakening the checks that do matter.
+      - name: Mypy
+        run: uv run mypy src
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen --extra dev
+      # No KiCad is installed here. Checks marked `integration` drive a live
+      # KiCad through kipy, which is not available on the runner; everything
+      # else parses .kicad_sch directly and needs no KiCad at all.
+      - name: Pytest
+        run: uv run pytest -m "not integration" --cov=kicad_evaltor --cov-report=term-missing
+
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Check metadata
+        run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

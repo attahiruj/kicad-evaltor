@@ -1,0 +1,51 @@
+repos:
+  # Housekeeping. These have no Python-specific equivalent.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  # Pinned to the exact ruff version in uv.lock so the hooks and the CI lint
+  # job cannot disagree about formatting.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff-format
+      - id: ruff-check
+        args: ["--fix"]
+
+  # The same two gates CI runs, but through the project environment rather than
+  # a pinned pre-commit copy. mypy and pytest are here to catch a broken change
+  # before it reaches a PR, not to be a second source of truth for style.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (src)
+        entry: uv run mypy src
+        language: system
+        pass_filenames: false
+        files: ^(src|tests)/.*\.py$
+
+      - id: pytest
+        name: pytest (not integration)
+        entry: uv run pytest -m "not integration" -q
+        language: system
+        pass_filenames: false
+        files: ^(src|tests)/.*\.py$
+        stages: [pre-push]
+
+      - id: build
+        name: uv build
+        entry: uv build
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

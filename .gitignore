@@ -1,0 +1,49 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.tox/
+.nox/
+.hypothesis/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# KiCad working files. Lock files, autosaves and per-user settings are written
+# beside the design while KiCad has it open and must never be committed.
+*.lck
+.~lock.*
+*.kicad_prl
+*-backups/
+/autosave/
+fp-lib-table
+fp-info-cache
+
+# Scratch output from tools/calibrate_stroke_font.py
+/tools/_output/
