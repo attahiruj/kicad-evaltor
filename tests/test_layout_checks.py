@@ -96,6 +96,43 @@ class TestDemoSheetResults:
         assert result.details["checked"] == 34
 
 
+class TestFindingsCarryProperties:
+    """A finding has to say what the sheet shows, not just which slot it came from."""
+
+    def test_text_findings_report_the_property_they_were_drawn_from(self):
+        result = run(TEXT_WIRE)
+        for finding in result.details["overlaps"]:
+            assert finding["first_kind"] == "text"
+            # A net label is drawn from the "label" item; there is no other text.
+            assert finding["first_properties"] == {"label": finding["first"]}
+
+    def test_a_wire_shows_nothing_so_it_reports_no_properties(self):
+        result = run(TEXT_WIRE)
+        for finding in result.details["overlaps"]:
+            assert finding["second_kind"] == "wire"
+            assert finding["second_properties"] == {}
+
+    def test_symbol_findings_report_the_parts_properties(self):
+        # A wide margin forces a finding on the tidy demo sheet so the payload
+        # can be inspected without editing the design.
+        result = run(SYMBOL_SYMBOL, margin=40.0)
+        assert result.status is Status.FAIL
+        for finding in result.details["overlaps"]:
+            assert finding["first_kind"] == finding["second_kind"] == "symbol"
+            for side in ("first", "second"):
+                properties = finding[f"{side}_properties"]
+                assert properties
+                # A power symbol's reference is hidden, so not every part draws
+                # one; where it is drawn it has to be the reference in the label.
+                assert properties.get("Reference") in (None, finding[side])
+
+    def test_the_whole_failure_payload_is_json_serialisable(self):
+        import json
+
+        result = run(TEXT_WIRE)
+        assert json.loads(json.dumps(result.details))["overlaps"] == result.details["overlaps"]
+
+
 class TestParamsAffectResults:
     def test_margin_is_reported_back(self):
         assert run(TEXT_TEXT, margin=1.0).details["margin"] == 1.0

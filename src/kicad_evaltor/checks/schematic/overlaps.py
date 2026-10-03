@@ -67,7 +67,11 @@ def _scene(ctx: DesignContext) -> tuple[SchematicScene | None, CheckResult | Non
 
 
 def _text_items(scene: SchematicScene) -> list[CollisionItem]:
-    return [CollisionItem("text", t.label, t.bbox, t.owner) for t in scene.texts]
+    # A field is drawn from one property, so that property is all there is to
+    # report; a free-standing text is its own kind of item.
+    return [
+        CollisionItem("text", t.label, t.bbox, t.owner, {t.field: t.content}) for t in scene.texts
+    ]
 
 
 def _symbol_items(scene: SchematicScene, *, include_pins: bool) -> list[CollisionItem]:
@@ -75,7 +79,9 @@ def _symbol_items(scene: SchematicScene, *, include_pins: bool) -> list[Collisio
     for comp in scene.components:
         box = comp.bbox if include_pins else comp.body_bbox
         if box is not None:
-            items.append(CollisionItem("symbol", comp.reference, box, comp.reference))
+            items.append(
+                CollisionItem("symbol", comp.reference, box, comp.reference, comp.properties)
+            )
     return items
 
 
@@ -249,6 +255,7 @@ class TextOffSheetCheck(_OverlapCheck):
             [
                 {
                     "label": item.label,
+                    "properties": dict(item.properties),
                     "bbox": [item.bbox.min_x, item.bbox.min_y, item.bbox.max_x, item.bbox.max_y],
                 }
                 for item in outside

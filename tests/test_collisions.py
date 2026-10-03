@@ -4,8 +4,8 @@ from kicad_evaltor.collisions import CollisionItem, colliding_pairs, cross_kind
 from kicad_evaltor.geometry import BBox
 
 
-def item(label, x0, y0, x1, y1, kind="box", owner=None):
-    return CollisionItem(kind, label, BBox(x0, y0, x1, y1), owner)
+def item(label, x0, y0, x1, y1, kind="box", owner=None, properties=None):
+    return CollisionItem(kind, label, BBox(x0, y0, x1, y1), owner, properties or {})
 
 
 class TestOverlapSemantics:
@@ -109,6 +109,33 @@ class TestReporting:
         assert payload["first_kind"] == "text"
         assert payload["second_kind"] == "symbol"
         assert payload["area"] == [1, 1, 2, 2]
+
+    def test_as_dict_carries_the_properties_behind_the_labels(self):
+        # "R1.Value" says which field collided; {"Value": "10k", "LCSC": ...}
+        # says what is on the sheet, and a user-defined property is no different
+        # from a standard one.
+        a = CollisionItem("text", "R1.Value", BBox(0, 0, 2, 2), "R1", {"Value": "10k"})
+        b = CollisionItem(
+            "symbol", "U2", BBox(1, 1, 3, 3), "U2", {"Value": "MPU-6050", "LCSC": "C221676"}
+        )
+        payload = colliding_pairs([a, b])[0].as_dict()
+        assert payload["first_properties"] == {"Value": "10k"}
+        assert payload["second_properties"] == {"Value": "MPU-6050", "LCSC": "C221676"}
+
+    def test_an_item_showing_nothing_reports_empty_properties(self):
+        a = item("wire", 0, 0, 2, 2, kind="wire")
+        b = item("t", 1, 1, 3, 3, kind="text")
+        payload = colliding_pairs([a, b])[0].as_dict()
+        assert payload["first_properties"] == {}
+
+    def test_the_payload_survives_json_serialisation(self):
+        import json
+
+        a = item("t", 0, 0, 2, 2, kind="text", properties={"Value": "10k"})
+        b = item("s", 1, 1, 3, 3, kind="symbol", properties={"LCSC": "C221676"})
+        assert json.loads(json.dumps(colliding_pairs([a, b])[0].as_dict()))[
+            "second_properties"
+        ] == {"LCSC": "C221676"}
 
     def test_cross_kind_keeps_only_mixed_pairs(self):
         texts = [item("t", 0, 0, 5, 5, kind="text"), item("t2", 0, 0, 5, 5, kind="text")]

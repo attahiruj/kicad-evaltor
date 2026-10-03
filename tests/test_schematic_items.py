@@ -10,6 +10,27 @@ from conftest import demo_schematic_path
 
 DEMO = demo_schematic_path()
 
+# One capacitor carrying the properties a real library part has: two standard
+# ones, a user-defined manufacturer part number, a user-defined LCSC code, and a
+# hidden footprint. Only the hidden one is absent from the scene.
+WITH_USER_PROPERTY = """(kicad_sch (version 20250114) (generator "evaltor")
+  (paper "A4")
+  (lib_symbols
+    (symbol "Device:C"
+      (property "Reference" "C?")
+      (symbol "C_0_1" (rectangle (start -1 1) (end 1 -1)))
+    )
+  )
+  (symbol (lib_id "Device:C") (at 50 50)
+    (property "Reference" "C1" (at 48 48))
+    (property "Value" "100nF" (at 48 52))
+    (property "Footprint" "Capacitor_SMD:C_0603" (at 48 56) (hide yes))
+    (property "MPN" "CL10B104KB8NNNC" (at 48 60))
+    (property "LCSC" "C1525" (at 48 64))
+  )
+)
+"""
+
 
 @pytest.fixture(scope="module")
 def scene():
@@ -62,6 +83,34 @@ class TestComponents:
 
     def test_placement_is_carried_through(self, scene):
         assert scene.component("U1").at == Placement(99.06, 88.9, rotation=0.0)
+
+    def test_the_visible_properties_are_carried_through(self, scene):
+        # Layout findings name a component by reference; its properties are what
+        # tell you which part that actually is.
+        r1 = scene.component("R1")
+        assert r1.properties["Reference"] == "R1"
+        assert r1.properties["Value"] == "10k"
+        assert r1.value == "10k"
+
+    def test_hidden_properties_are_not_reported(self, scene):
+        # A hidden field is not drawn, so it is not part of what the sheet shows.
+        for comp in scene.components:
+            for text in comp.texts:
+                assert text.field in comp.properties, f"{comp.reference}.{text.field}"
+
+    def test_a_user_defined_property_is_kept_like_any_other(self, tmp_path):
+        # An LCSC part number is a property, not a special case: it is reported
+        # when it is drawn and dropped when it is hidden.
+        path = tmp_path / "lcsc.kicad_sch"
+        path.write_text(WITH_USER_PROPERTY, encoding="utf-8")
+        component = extract(load_schematic(path)).component("C1")
+        assert component.properties == {
+            "Reference": "C1",
+            "Value": "100nF",
+            "MPN": "CL10B104KB8NNNC",
+            "LCSC": "C1525",
+        }
+        assert component.properties.get("Footprint") is None
 
 
 class TestTextGeometry:

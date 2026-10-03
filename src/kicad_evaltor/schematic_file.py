@@ -98,8 +98,10 @@ class FileSymbol:
         self.lib_id = lib_id
         self.value = value
         self.footprint = FootprintRef(footprint)
-        # Checks merge user_fields then fields, so custom properties go in
-        # user_fields and the standard ones in fields, mirroring kipy.
+        # Every property the symbol carries, standard or user-defined. This is the
+        # one source; `user_fields` and `fields` below are the two views checks
+        # read, split to mirror kipy, and are derived from this dict.
+        self.properties = dict(properties)
         self.user_fields = {
             name: text for name, text in properties.items() if name not in _STANDARD_PROPERTIES
         }

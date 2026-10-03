@@ -103,14 +103,18 @@ class SymbolGeometry:
 
 @dataclass(frozen=True)
 class TextItem:
-    """A run of text on the sheet, with the box KiCad reserves for it."""
+    """A run of text on the sheet, with the box KiCad reserves for it.
+
+    ``field`` names the property the text was drawn from: a symbol field name
+    such as ``Value``, or the kind of a free-standing item such as ``label``.
+    """
 
     content: str
     bbox: BBox
     rotation: float
     size: float
     owner: str | None = None
-    field: str | None = None
+    field: str = ""
 
     @property
     def label(self) -> str:
@@ -161,7 +165,12 @@ class Junction:
 
 @dataclass(frozen=True)
 class Component:
-    """A placed symbol with its outline, pins and visible text."""
+    """A placed symbol with its outline, pins and visible text.
+
+    ``properties`` holds the symbol's visible properties, user-defined ones such
+    as LCSC part numbers included. Hidden properties are left out: they are not
+    drawn, so they are not part of what the sheet looks like.
+    """
 
     reference: str
     lib_id: str
@@ -170,6 +179,15 @@ class Component:
     pin_bboxes: tuple[BBox, ...]
     texts: tuple[TextItem, ...]
     is_power: bool = False
+    properties: Mapping[str, str] = field(default_factory=dict)
+
+    @property
+    def value(self) -> str:
+        """The Value property, which is what a schematic is read for.
+
+        One property among several; ``properties`` is the whole set.
+        """
+        return self.properties.get("Value", "")
 
     @property
     def bbox(self) -> BBox | None:
@@ -336,7 +354,7 @@ def _text_item(
     halign: str,
     valign: str,
     owner: str | None,
-    name: str | None,
+    name: str,
 ) -> TextItem | None:
     if not content:
         return None
@@ -379,6 +397,16 @@ def _component_texts(symbol, owner: str) -> tuple[TextItem, ...]:
     return tuple(texts)
 
 
+def _visible_properties(symbol) -> dict[str, str]:
+    """The symbol's drawn properties, keyed by name.
+
+    Built from the positioned fields rather than from ``symbol.properties`` so
+    that ``(hide yes)`` and empty values drop out here too, which is the same
+    rule the text geometry uses.
+    """
+    return {field_node.name: field_node.value for field_node in symbol.texts if field_node.visible}
+
+
 def extract(schematic: FileSchematic) -> SchematicScene:
     """Build the sheet's geometry from a parsed schematic."""
     lib_symbols = schematic.lib_symbols()
@@ -412,6 +440,7 @@ def extract(schematic: FileSchematic) -> SchematicScene:
             pin_bboxes=tuple(pin_boxes),
             texts=_component_texts(symbol, symbol.reference),
             is_power=symbol.lib_id.startswith("power:"),
+            properties=_visible_properties(symbol),
         )
         scene.components.append(component)
         scene.texts.extend(component.texts)
