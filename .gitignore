@@ -42,6 +42,7 @@ Thumbs.db
 *.kicad_prl
 *-backups/
 /autosave/
+.history/
 fp-lib-table
 fp-info-cache
 
