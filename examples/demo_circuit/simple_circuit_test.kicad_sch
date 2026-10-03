@@ -3722,7 +3722,7 @@
 			)
 		)
 		(property "Value" "Battery"
-			(at 52.705 87.63 0)
+			(at 52.705 91.79 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects

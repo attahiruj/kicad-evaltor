@@ -10,8 +10,8 @@ Two deliberate modelling choices:
 * Symbol-vs-symbol compares *body* boxes only. Pins are meant to reach toward
   each other, so pin overlap is normal and reporting it would bury the real
   defects.
-* Text-vs-symbol compares the full body-and-pins box and skips the symbol the
-  text belongs to, since KiCad routinely parks a reference beside its own part.
+* Text-vs-symbol uses the full body-and-pins box, except against the symbol the
+  text belongs to. See ``TextSymbolOverlapCheck``.
 """
 
 from __future__ import annotations
@@ -145,6 +145,9 @@ class _OverlapCheck(Check[OverlapParams]):
 
         items = _drop_ignored(self.items(scene), self.params.ignore)
         collisions = self.filter(colliding_pairs(items, margin=self.params.margin))
+        return self._result(items, collisions)
+
+    def _result(self, items: list[CollisionItem], collisions: list) -> CheckResult:
         result = _report(
             self.id,
             [c.describe() for c in collisions],
@@ -168,22 +171,52 @@ class TextTextOverlapCheck(_OverlapCheck):
 
 @register
 class TextSymbolOverlapCheck(_OverlapCheck):
+    """Reports text drawn on top of a symbol.
+
+    Two rules, because one does not fit both cases.
+
+    Against *another* symbol the full body-and-pins box counts: landing on someone
+    else's pin stub is a real collision.
+
+    Against its *own* symbol only the body counts, and only a straddle is a
+    defect. Pins are excluded because KiCad puts a reference directly above a
+    body, which is exactly where the topmost pin stub is, so measuring pins would
+    report the default placement of every part. A body that fully contains its own
+    text is excluded too: a resistor is mostly empty space, and KiCad does put a
+    value inside one. What is unreadable is text crossing the outline, half in and
+    half out, or sitting on top of it.
+    """
+
     id = "sch.layout.text_symbol_overlap"
     name = "Text Over Symbol Overlap"
-    description = "Reports text drawn on top of a symbol it does not belong to"
+    description = "Reports text drawn on top of a symbol"
     category = CheckCategory.SCHEMATIC
 
-    def items(self, scene: SchematicScene) -> list[CollisionItem]:
-        return _text_items(scene) + _symbol_items(scene, include_pins=True)
+    def run(self, ctx: DesignContext) -> CheckResult:
+        scene, blocker = _scene(ctx)
+        if blocker is not None:
+            return blocker
+        if scene is None:
+            return CheckResult.skip(self.id, "No schematic available")
 
-    def filter(self, collisions):
-        return _text_first(
-            [
-                c
-                for c in cross_kind(collisions, "text", "symbol")
-                if not (c.first.owner and c.first.owner == c.second.owner)
-            ]
-        )
+        ignore = self.params.ignore
+        texts = _drop_ignored(_text_items(scene), ignore)
+        bodies = _drop_ignored(_symbol_items(scene, include_pins=False), ignore)
+        pinned = _drop_ignored(_symbol_items(scene, include_pins=True), ignore)
+
+        def against(symbols: list[CollisionItem]) -> list:
+            pairs = colliding_pairs(texts + symbols, margin=self.params.margin)
+            return _text_first(cross_kind(pairs, "text", "symbol"))
+
+        def own(collision) -> bool:
+            return bool(collision.first.owner) and collision.first.owner == collision.second.owner
+
+        def straddles(collision) -> bool:
+            return not collision.second.bbox.contains(collision.first.bbox)
+
+        collisions = [c for c in against(bodies) if own(c) and straddles(c)]
+        collisions += [c for c in against(pinned) if not own(c)]
+        return self._result(texts + pinned, collisions)
 
 
 @register

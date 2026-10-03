@@ -27,7 +27,10 @@ without that flag to see the real list of 31.
 Its layout is untidy but not overlapping, and the layout checks agree. ``SW1``
 is placed at 270 degrees and ``C4`` at 90, with their fields stored at a
 compensating angle; KiCad draws field text flat regardless, so neither part's
-reference collides with its value. The same applies to the power symbols sitting
+reference collides with its value. ``Y1``'s reference sits inside the crystal
+body, which is allowed: a small symbol is mostly empty space, and only text
+crossing the outline is a defect. ``J1``'s value is moved below its connector
+because it does cross the outline. The same applies to the power symbols sitting
 on ``U2``: a power symbol's name is drawn by its own artwork rather than as a
 text field, so it is never treated as text. The text geometry behind the report
 is measured from a real KiCad renderer rather than estimated, which is what

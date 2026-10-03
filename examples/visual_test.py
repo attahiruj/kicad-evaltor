@@ -3,8 +3,13 @@
 
 ``examples/demo_circuit/visual_test.kicad_sch`` carries seven annotation texts
 saying what is wrong with it. This runs all five layout checks and reports which
-of those a check catches, which needs a margin to appear, and which is out of
-scope by design.
+of those a check catches, which needs a margin to appear, and why the rest are
+not reported.
+
+Two of the seven turn out not to be true of the sheet, and the report says so
+rather than staying quiet: J1's label clears its own body, and so does SW2's
+value. Reporting a claim that does not hold would be the same mistake as missing
+one that does.
 
 No KiCad needed: the layout checks read the file directly.
 
@@ -49,7 +54,7 @@ LAYOUT_CHECKS = (
 # solved, so these are exact for this file.
 EXPECTED_COUNTS = {
     "sch.layout.text_text_overlap": 1,
-    "sch.layout.text_symbol_overlap": 3,
+    "sch.layout.text_symbol_overlap": 7,
     "sch.layout.text_wire_overlap": 2,
     "sch.layout.symbol_symbol_overlap": 1,
     "sch.layout.text_off_sheet": 0,
@@ -62,13 +67,15 @@ class Documented:
 
     ``key`` identifies the caption by a distinctive fragment, so rewrapping the
     text does not break the match. ``captured`` pairs a check id with a prefix of
-    the finding that check is expected to report; empty means out of scope, and
-    ``reason`` says why.
+    the finding that check is expected to report. An empty ``captured`` with a
+    ``reason`` means the claim is out of scope by design; an empty ``captured``
+    with a ``note`` means the claim simply is not true of this sheet.
     """
 
     key: str
     captured: tuple[tuple[str, str], ...] = ()
     reason: str = ""
+    note: str = ""
 
 
 DOCUMENTED = (
@@ -86,15 +93,16 @@ DOCUMENTED = (
     ),
     Documented(
         "J1 symbol label overlaps symbol shape",
-        reason="text is exempt against the symbol it belongs to",
+        note="J1.Reference clears its own body by 0.58mm, so the claim does not hold",
     ),
     Documented(
         "No connect flag placed on",
-        reason="no-connect flags are not extracted, and U2's label is its own symbol",
+        captured=(("sch.layout.text_symbol_overlap", "U2.Reference overlaps U2"),),
+        reason="the no-connect flag is not extracted as an item at all",
     ),
     Documented(
         "SW_Push value overlaps own symbol",
-        reason="own-symbol exemption again",
+        note="SW_Push clears its own body; it is the reference that straddles",
     ),
     Documented(
         "PWR_FLAG text and symbol overlaps",
@@ -102,8 +110,10 @@ DOCUMENTED = (
     ),
     Documented(
         "R1 value (10K) intersects own symbol shape",
-        captured=(("sch.layout.text_symbol_overlap", "RESET overlaps R1"),),
-        reason="the value-on-its-own-symbol half is caught by text_text instead",
+        captured=(
+            ("sch.layout.text_symbol_overlap", "RESET overlaps R1"),
+            ("sch.layout.text_symbol_overlap", "R1.Value overlaps R1"),
+        ),
     ),
 )
 
@@ -202,7 +212,8 @@ def print_coverage(captions: list[str], report: TestReport) -> None:
             print(f"  {index}. ?? no DOCUMENTED entry describes this caption")
             continue
         if not documented.captured:
-            print(f"  {index}. out of scope: {documented.reason}")
+            detail = documented.note or f"out of scope: {documented.reason}"
+            print(f"  {index}. {detail}")
             continue
         print(f"  {index}. caught")
         for check_id, prefix in documented.captured:

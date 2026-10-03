@@ -96,6 +96,92 @@ class TestDemoSheetResults:
         assert result.details["checked"] == 34
 
 
+# Two 5.08 x 5.08 bodies with a 1.27mm pin stub top and bottom, so body+pins spans
+# y 96.19..103.81 while the body alone spans 97.46..102.54.
+PART = """(symbol "Device:R"
+      (symbol "R_0_1"
+        (rectangle (start -2.54 -2.54) (end 2.54 2.54))
+        (pin 1 (at 0 3.81 270) (length 1.27))
+        (pin 2 (at 0 -3.81 90) (length 1.27))
+      )
+    )"""
+
+
+def field(reference, value, x, y):
+    return f"""(property "Reference" "{reference}" (at {x} {y} 0)
+        (effects (font (size 1.27 1.27))))
+      (property "Value" "{value}" (at {x} {y - 8} 0)
+        (effects (font (size 1.27 1.27))))"""
+
+
+@pytest.fixture
+def own_symbol_ctx(tmp_path):
+    """One placement per rule branch, around identical 5.08mm bodies.
+
+    R1's reference sits over its own pin stub, R2's wholly inside its own body,
+    R3's across its own body's edge, and a free-standing label over R2's pin.
+    """
+    path = tmp_path / "own_symbol.kicad_sch"
+    path.write_text(
+        f"""(kicad_sch (version 20250114) (generator "evaltor") (paper "A4")
+  (lib_symbols
+    {PART}
+  )
+  (symbol (lib_id "Device:R") (at 100 100 0)
+    {field("R1", "10k", 100, 103.5)}
+  )
+  (symbol (lib_id "Device:R") (at 140 100 0)
+    {field("R2", "10k", 140, 100)}
+  )
+  (symbol (lib_id "Device:R") (at 180 100 0)
+    {field("R3", "10k", 180, 102.5)}
+  )
+  (text "NETTLE"
+    (at 140 103.2 0)
+    (effects (font (size 1.27 1.27)))
+  )
+)
+""",
+        encoding="utf-8",
+    )
+    return DesignContext(schematic_path=path)
+
+
+class TestOwnSymbolText:
+    """A part's own fields must clear its own artwork, but not its own pins.
+
+    The demo sheet is clean by design, so these cases are built rather than
+    observed. The exemptions are narrow on purpose: text that fits wholly inside
+    a body is left alone, because a small symbol is mostly empty space, while text
+    crossing the outline is reported.
+    """
+
+    def _reported(self, ctx):
+        result = CheckRegistry.create(TEXT_SYMBOL).run(ctx)
+        assert result.status is Status.FAIL
+        return {o["first"]: o["second"] for o in result.details["overlaps"]}
+
+    def test_text_across_its_own_body_edge_is_reported(self, own_symbol_ctx):
+        assert self._reported(own_symbol_ctx)["R3.Reference"] == "R3"
+
+    def test_text_wholly_inside_its_own_body_is_not(self, own_symbol_ctx):
+        reported = self._reported(own_symbol_ctx)
+        assert "R2.Reference" not in reported
+        assert "R2.Value" not in reported
+
+    def test_text_over_its_own_pin_stub_is_not(self, own_symbol_ctx):
+        # A reference above a body is where the topmost pin also is, so this is
+        # the case the pin exemption exists for.
+        reported = self._reported(own_symbol_ctx)
+        assert "R1.Reference" not in reported
+        assert "R1.Value" not in reported
+
+    def test_the_same_pin_stub_is_still_reported_for_text_that_owns_nothing(self, own_symbol_ctx):
+        # Otherwise the rule would be a blanket exemption rather than a statement
+        # about a part's own artwork.
+        assert self._reported(own_symbol_ctx)["NETTLE"] == "R2"
+
+
 class TestFindingsCarryProperties:
     def test_text_findings_report_the_property_they_were_drawn_from(self):
         result = run(TEXT_WIRE)
