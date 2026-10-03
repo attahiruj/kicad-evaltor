@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed `circuit.kicad_sch` to `simple_circuit_test.kicad_sch` and
+  `demo_schematic_check.py` to `simple_circuit_test.py`, so each demo script is
+  named after the sheet it runs.
+- `sch.layout.text_symbol_overlap` now reports a component's own text crossing
+  its own body outline. Previously a part's text was exempt against its own
+  symbol entirely. Pins stay out of it: KiCad places a reference above a body,
+  which is where the topmost pin stub is, and a small symbol is mostly empty
+  space, so text fitting wholly inside a body is left alone. Text over another
+  symbol's pins is still reported. `J1`'s value was moved clear of its connector
+  in the demo sheet, which is the one straddle it actually had.
+
+### Added
+
+- `examples/visual_test.py`, a layout demo against
+  `examples/demo_circuit/visual_test.kicad_sch`. `--json` prints the failures as
+  JSON.
+- Layout findings report each item's visible properties, so a collision says what
+  is on the sheet and not only which label it was.
+- `CheckResult.to_dict()` and `TestReport.failures_json()`. `to_json()` takes an
+  `indent`.
+
 ### Fixed
 
 - `__version__` is read from the installed distribution instead of a literal, so
