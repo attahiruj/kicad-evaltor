@@ -105,8 +105,8 @@ class SymbolGeometry:
 class TextItem:
     """A run of text on the sheet, with the box KiCad reserves for it.
 
-    ``field`` names the property the text was drawn from: a symbol field name
-    such as ``Value``, or the kind of a free-standing item such as ``label``.
+    ``field`` names the property it was drawn from: a symbol field name such as
+    ``Value``, or a free-standing kind such as ``label``.
     """
 
     content: str
@@ -167,9 +167,8 @@ class Junction:
 class Component:
     """A placed symbol with its outline, pins and visible text.
 
-    ``properties`` holds the symbol's visible properties, user-defined ones such
-    as LCSC part numbers included. Hidden properties are left out: they are not
-    drawn, so they are not part of what the sheet looks like.
+    ``properties`` holds its drawn properties, user-defined ones included. Hidden
+    ones are left out: they are not drawn.
     """
 
     reference: str
@@ -183,10 +182,7 @@ class Component:
 
     @property
     def value(self) -> str:
-        """The Value property, which is what a schematic is read for.
-
-        One property among several; ``properties`` is the whole set.
-        """
+        """The Value property, which is the one a schematic is read for."""
         return self.properties.get("Value", "")
 
     @property
@@ -400,9 +396,8 @@ def _component_texts(symbol, owner: str) -> tuple[TextItem, ...]:
 def _visible_properties(symbol) -> dict[str, str]:
     """The symbol's drawn properties, keyed by name.
 
-    Built from the positioned fields rather than from ``symbol.properties`` so
-    that ``(hide yes)`` and empty values drop out here too, which is the same
-    rule the text geometry uses.
+    Built from the fields rather than from ``symbol.properties`` so that hidden
+    and empty values drop out here too.
     """
     return {field_node.name: field_node.value for field_node in symbol.texts if field_node.visible}
 

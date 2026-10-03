@@ -65,11 +65,7 @@ class TestReport:
         return json.dumps(self.to_dict(), indent=indent)
 
     def failures_json(self, *, indent: int | None = 2) -> str:
-        """JSON for just the failures, which is what a CI job wants to read.
-
-        A clean run yields ``[]``, so a caller can parse the result
-        unconditionally instead of first checking whether anything failed.
-        """
+        """JSON for just the failures; a clean run yields ``[]``."""
         import json
 
         return json.dumps([result.to_dict() for result in self.failures()], indent=indent)

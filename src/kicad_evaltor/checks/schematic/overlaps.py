@@ -67,8 +67,6 @@ def _scene(ctx: DesignContext) -> tuple[SchematicScene | None, CheckResult | Non
 
 
 def _text_items(scene: SchematicScene) -> list[CollisionItem]:
-    # A field is drawn from one property, so that property is all there is to
-    # report; a free-standing text is its own kind of item.
     return [
         CollisionItem("text", t.label, t.bbox, t.owner, {t.field: t.content}) for t in scene.texts
     ]

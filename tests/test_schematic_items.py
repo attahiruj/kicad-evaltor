@@ -10,9 +10,8 @@ from conftest import demo_schematic_path
 
 DEMO = demo_schematic_path()
 
-# One capacitor carrying the properties a real library part has: two standard
-# ones, a user-defined manufacturer part number, a user-defined LCSC code, and a
-# hidden footprint. Only the hidden one is absent from the scene.
+# A capacitor with the properties a real library part has: two standard ones,
+# two user-defined, and a hidden footprint.
 WITH_USER_PROPERTY = """(kicad_sch (version 20250114) (generator "evaltor")
   (paper "A4")
   (lib_symbols
@@ -85,22 +84,17 @@ class TestComponents:
         assert scene.component("U1").at == Placement(99.06, 88.9, rotation=0.0)
 
     def test_the_visible_properties_are_carried_through(self, scene):
-        # Layout findings name a component by reference; its properties are what
-        # tell you which part that actually is.
         r1 = scene.component("R1")
         assert r1.properties["Reference"] == "R1"
         assert r1.properties["Value"] == "10k"
         assert r1.value == "10k"
 
     def test_hidden_properties_are_not_reported(self, scene):
-        # A hidden field is not drawn, so it is not part of what the sheet shows.
         for comp in scene.components:
             for text in comp.texts:
                 assert text.field in comp.properties, f"{comp.reference}.{text.field}"
 
     def test_a_user_defined_property_is_kept_like_any_other(self, tmp_path):
-        # An LCSC part number is a property, not a special case: it is reported
-        # when it is drawn and dropped when it is hidden.
         path = tmp_path / "lcsc.kicad_sch"
         path.write_text(WITH_USER_PROPERTY, encoding="utf-8")
         component = extract(load_schematic(path)).component("C1")

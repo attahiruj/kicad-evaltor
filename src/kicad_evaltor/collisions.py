@@ -20,11 +20,8 @@ from kicad_evaltor.geometry import BBox
 class CollisionItem:
     """Something that can collide: a labelled box plus what kind of thing it is.
 
-    ``properties`` is the set of things that item shows on the sheet, keyed by
-    name, so a report can say what is there rather than only which slot it came
-    from. For a symbol those are its visible properties, user-defined ones such
-    as an LCSC part number included; for a field they are the one property the
-    text was drawn from. A wire shows nothing and has none.
+    ``properties`` is what the item shows on the sheet, keyed by name. A wire
+    shows nothing and has none.
     """
 
     kind: str
@@ -65,11 +62,7 @@ class Collision:
         return self.area.height
 
     def describe(self) -> str:
-        """A one-line summary naming both items.
-
-        Labels only, so it stays short enough for a check message. The properties
-        behind those labels are in :meth:`as_dict` for anything that needs them.
-        """
+        """A one-line summary. Properties stay in :meth:`as_dict`."""
         return f"{self.first.label} overlaps {self.second.label}"
 
     def as_dict(self) -> dict[str, object]:
