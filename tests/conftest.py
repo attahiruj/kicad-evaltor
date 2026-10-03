@@ -76,18 +76,25 @@ def kicad_cli_supports(subcommand: str, cli: Path) -> bool:
     return result.returncode == 0 and subcommand in result.stdout
 
 
+# The sheet the suite's expectations are written against. A second demo sheet,
+# visual_test.kicad_sch, lives in the same folder, so this one is picked by name
+# rather than by whichever file happens to sort first.
+DEMO_SCHEMATIC_STEM = "simple_circuit_test"
+
+
 def demo_schematic_path() -> Path:
     """Locate the bundled demo schematic.
 
     The project is renamed from inside KiCad, which renames the ``.kicad_sch``
-    with it, so the file is discovered rather than hardcoded: a test suite that
-    breaks because someone saved the project under a new name is worse than
-    useless.
+    with it, so the file is discovered rather than hardcoded.
     """
     demo_dir = Path(__file__).resolve().parent.parent / "examples" / "demo_circuit"
     candidates = sorted(
         path for path in demo_dir.glob("*.kicad_sch") if not path.name.startswith("~")
     )
+    named = [path for path in candidates if path.stem == DEMO_SCHEMATIC_STEM]
+    if named:
+        return named[0]
     if not candidates:
         raise FileNotFoundError(f"no demo schematic in {demo_dir}")
     return candidates[0]

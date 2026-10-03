@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Run kicad-evaltor checks against the bundled demo schematic.
+"""Run kicad-evaltor checks against a schematic that is meant to pass.
 
-The demo in ``examples/demo_circuit/circuit.kicad_sch`` is an ATmega328P +
-MPU-6050 IMU breakout. It is the same design the test suite uses, so every
-expectation below was read back from the design itself rather than guessed:
+The demo in ``examples/demo_circuit/simple_circuit_test.kicad_sch`` is an
+ATmega328P + MPU-6050 IMU breakout. It is the same design the test suite uses,
+so every expectation below was read back from the design itself rather than
+guessed:
 
     R1       10k pull-up on /RESET with SW1
     R2, R3   4k7 pull-ups on /SDA and /SCL
@@ -39,7 +40,7 @@ check still exists for anyone who wants it; see the note in ``overlaps.py``.
 
 Usage:
 
-    python examples/demo_schematic_check.py
+    python examples/simple_circuit_test.py
 
 Exit code is 0 when the only failure is the deliberate one, so this doubles
 as a smoke test.
@@ -70,7 +71,7 @@ from kicad_evaltor import (
     TextTextOverlapCheck,
 )
 
-DEMO_SCHEMATIC = Path(__file__).resolve().parent / "demo_circuit" / "circuit.kicad_sch"
+DEMO_SCHEMATIC = Path(__file__).resolve().parent / "demo_circuit" / "simple_circuit_test.kicad_sch"
 
 
 def find_kicad_cli() -> str | None:
