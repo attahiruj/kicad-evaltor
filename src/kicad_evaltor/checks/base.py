@@ -54,6 +54,20 @@ class CheckResult:
     def is_fail(self) -> bool:
         return self.status in (TestStatus.FAIL, TestStatus.ERROR)
 
+    def to_dict(self) -> dict[str, Any]:
+        """A JSON-serialisable view of this result.
+
+        The ``status`` becomes its plain string value so the payload can be fed
+        straight to ``json.dumps`` and compared without importing the enum.
+        """
+        return {
+            "check_id": self.check_id,
+            "status": self.status.value,
+            "message": self.message,
+            "details": self.details,
+            "duration": self.duration,
+        }
+
 
 @dataclass(init=False)
 class CheckParams:

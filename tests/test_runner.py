@@ -203,6 +203,44 @@ class TestTestReportSerialization:
         report = TestReport([CheckResult.pass_("a", "ok")])
         assert json.loads(report.to_json()) == report.to_dict()
 
+    def test_to_json_indent_is_configurable(self):
+        import json
+
+        report = TestReport([CheckResult.pass_("a", "ok")])
+        assert json.loads(report.to_json(indent=None)) == report.to_dict()
+        assert "\n" not in report.to_json(indent=None)
+
+    def test_result_serialises_on_its_own(self):
+        result = CheckResult.fail("b", "broke", count=2)
+        assert result.to_dict() == {
+            "check_id": "b",
+            "status": "fail",
+            "message": "broke",
+            "details": {"count": 2},
+            "duration": 0.0,
+        }
+
+    def test_failures_json_carries_only_the_failures(self):
+        import json
+
+        report = TestReport(
+            [
+                CheckResult.pass_("a", "ok"),
+                CheckResult.fail("b", "broke", count=2),
+                CheckResult.error("c", "crashed"),
+                CheckResult.skip("d", "nope"),
+            ]
+        )
+        payload = json.loads(report.failures_json())
+        assert [entry["check_id"] for entry in payload] == ["b", "c"]
+        assert payload[0]["details"] == {"count": 2}
+
+    def test_failures_json_of_a_clean_run_is_an_empty_list(self):
+        import json
+
+        report = TestReport([CheckResult.pass_("a", "ok")])
+        assert json.loads(report.failures_json()) == []
+
     def test_summary_uses_status_icon_per_status(self):
         report = TestReport(
             [

@@ -56,22 +56,23 @@ class TestReport:
                 "skipped": self.skipped_count,
                 "all_passed": self.all_passed,
             },
-            "results": [
-                {
-                    "check_id": r.check_id,
-                    "status": r.status.value,
-                    "message": r.message,
-                    "details": r.details,
-                    "duration": r.duration,
-                }
-                for r in self.results
-            ],
+            "results": [result.to_dict() for result in self.results],
         }
 
-    def to_json(self) -> str:
+    def to_json(self, *, indent: int | None = 2) -> str:
         import json
 
-        return json.dumps(self.to_dict(), indent=2)
+        return json.dumps(self.to_dict(), indent=indent)
+
+    def failures_json(self, *, indent: int | None = 2) -> str:
+        """JSON for just the failures, which is what a CI job wants to read.
+
+        A clean run yields ``[]``, so a caller can parse the result
+        unconditionally instead of first checking whether anything failed.
+        """
+        import json
+
+        return json.dumps([result.to_dict() for result in self.failures()], indent=indent)
 
     def summary(self) -> str:
         lines = [
