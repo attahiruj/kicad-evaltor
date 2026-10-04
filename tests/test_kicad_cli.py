@@ -15,6 +15,7 @@ from kicad_evaltor.utils.kicad_cli import (
     parse_erc_report,
     report_workspace,
     run_kicad_cli,
+    violation_details,
 )
 
 
@@ -140,22 +141,70 @@ class TestRunKiCadCli:
 
 
 class TestReportParsers:
-    def test_parse_erc_report_extracts_violations(self):
-        payload = json.dumps({"erc_violation": [{"severity": "error"}, {"severity": "warning"}]})
-        assert parse_erc_report(payload) == [{"severity": "error"}, {"severity": "warning"}]
+    def test_parse_erc_report_reads_the_per_sheet_shape_kicad_10_writes(self):
+        # KiCad 10 puts every violation in sheets[*].violations and writes no
+        # top-level "violations" key at all. Reading only the top level finds
+        # nothing and reports a schematic with errors on it as clean.
+        payload = json.dumps(
+            {
+                "$schema": "https://schemas.kicad.org/erc.v1.json",
+                "kicad_version": "10.0.1",
+                "sheets": [
+                    {
+                        "path": "/",
+                        "uuid_path": "/root-uuid",
+                        "violations": [{"severity": "error", "type": "pin_not_connected"}],
+                    }
+                ],
+            }
+        )
 
-    def test_parse_erc_report_reads_the_key_kicad_10_emits(self):
-        # KiCad 10 writes "violations"; "erc_violation" was never a real key.
+        found = parse_erc_report(payload)
+
+        assert [v["type"] for v in found] == ["pin_not_connected"]
+        assert found[0]["sheet"] == "/"
+
+    def test_parse_erc_report_collects_every_sheet(self):
+        # A hierarchical design reports per sheet, and a violation on a subsheet
+        # must not be dropped just because the root sheet's list came first.
+        payload = json.dumps(
+            {
+                "sheets": [
+                    {"path": "/", "violations": [{"severity": "error", "type": "root_only"}]},
+                    {"path": "/sub-uuid", "violations": [{"severity": "error", "type": "on_sub"}]},
+                ]
+            }
+        )
+
+        found = parse_erc_report(payload)
+
+        assert [(v["type"], v["sheet"]) for v in found] == [
+            ("root_only", "/"),
+            ("on_sub", "/sub-uuid"),
+        ]
+
+    def test_parse_erc_report_reports_a_clean_sheet_as_no_violations(self):
+        payload = json.dumps(
+            {"sheets": [{"path": "/", "uuid_path": "/root", "violations": []}]},
+        )
+
+        assert parse_erc_report(payload) == []
+
+    def test_parse_erc_report_still_reads_the_flat_shape_of_kicad_8_and_9(self):
         payload = json.dumps({"violations": [{"severity": "error", "type": "unconnected"}]})
+
         assert parse_erc_report(payload) == [{"severity": "error", "type": "unconnected"}]
 
-    def test_parse_drc_report_reads_the_key_kicad_10_emits(self):
+    def test_parse_drc_report_reads_the_flat_list_kicad_10_writes(self):
+        # DRC did not move per sheet, so it keeps one top-level list.
         payload = json.dumps({"violations": [{"severity": "error", "type": "track_dangling"}]})
+
         assert parse_drc_report(payload) == [{"severity": "error", "type": "track_dangling"}]
 
-    def test_erc_and_drc_share_the_violations_key(self):
-        payload = json.dumps({"violations": [{"severity": "error"}]})
-        assert parse_erc_report(payload) == parse_drc_report(payload)
+    def test_drc_violations_carry_no_sheet(self):
+        payload = json.dumps({"violations": [{"severity": "error", "type": "clearance"}]})
+
+        assert "sheet" not in parse_drc_report(payload)[0]
 
     def test_parse_erc_report_defaults_to_empty(self):
         assert parse_erc_report("{}") == []
@@ -163,12 +212,16 @@ class TestReportParsers:
     def test_parse_erc_report_rejects_malformed_json(self):
         assert parse_erc_report("not json") == []
 
-    def test_parse_erc_report_rejects_non_list_violations(self):
-        assert parse_erc_report(json.dumps({"erc_violation": {"oops": 1}})) == []
+    def test_parse_erc_report_rejects_a_non_list_sheets_key(self):
+        assert parse_erc_report(json.dumps({"sheets": {"oops": 1}})) == []
 
-    def test_parse_drc_report_extracts_violations(self):
-        payload = json.dumps({"drc_violation": [{"severity": "error"}]})
-        assert parse_drc_report(payload) == [{"severity": "error"}]
+    def test_parse_erc_report_rejects_non_list_violations(self):
+        payload = json.dumps({"sheets": [{"path": "/", "violations": {"oops": 1}}]})
+
+        assert parse_erc_report(payload) == []
+
+    def test_parse_drc_report_rejects_non_list_violations(self):
+        assert parse_drc_report(json.dumps({"violations": "nope"})) == []
 
     def test_parse_drc_report_defaults_to_empty(self):
         assert parse_drc_report("{}") == []
@@ -177,8 +230,31 @@ class TestReportParsers:
         assert parse_drc_report("") == []
         assert parse_drc_report("<html>error</html>") == []
 
-    def test_parse_drc_report_rejects_non_list_violations(self):
-        assert parse_drc_report(json.dumps({"drc_violation": "nope"})) == []
+
+class TestViolationDetails:
+    def test_it_names_the_fields_kicad_actually_writes(self):
+        # KiCad spells the human text "description" and puts positions in
+        # items[*].pos. Reading "message" or "at" yields None for every entry.
+        details = violation_details(
+            {
+                "type": "pin_not_connected",
+                "severity": "error",
+                "description": "Pin not connected",
+                "items": [{"description": "R1 Pin 1", "pos": {"x": 1.0, "y": 2.0}}],
+            }
+        )
+
+        assert details["description"] == "Pin not connected"
+        assert details["items"][0]["pos"] == {"x": 1.0, "y": 2.0}
+
+    def test_a_violation_with_no_items_reports_an_empty_list(self):
+        assert violation_details({"type": "x", "severity": "error"})["items"] == []
+
+    def test_the_sheet_is_carried_through_when_the_report_has_one(self):
+        assert violation_details({"severity": "error", "sheet": "/sub"})["sheet"] == "/sub"
+
+    def test_the_sheet_is_absent_otherwise(self):
+        assert "sheet" not in violation_details({"severity": "error"})
 
 
 class TestFilterViolationsBySeverity:

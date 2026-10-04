@@ -413,18 +413,41 @@ class FakeContext:
         target.write_text(payload, encoding="utf-8")
 
 
-def erc_report(*violations: dict[str, Any]) -> SubprocessResult:
-    return cli_json({"erc_violation": list(violations)})
+def erc_report(*violations: dict[str, Any], sheet: str = "/") -> SubprocessResult:
+    """A canned ERC report in the shape KiCad 10 writes.
+
+    Per sheet, under ``sheets[*].violations``: there is no top-level
+    ``violations`` key in a real report, so a fixture that writes one would test
+    a format KiCad never produces.
+    """
+    return cli_json(
+        {
+            "$schema": "https://schemas.kicad.org/erc.v1.json",
+            "kicad_version": "10.0.1",
+            "sheets": [{"path": sheet, "uuid_path": sheet, "violations": list(violations)}],
+        }
+    )
 
 
 def drc_report(*violations: dict[str, Any]) -> SubprocessResult:
-    return cli_json({"drc_violation": list(violations)})
+    """A canned DRC report, which unlike ERC stays one flat top-level list."""
+    return cli_json({"violations": list(violations)})
 
 
 def violation(
-    severity: str = "error", message: str = "problem", kind: str = "unconnected"
+    severity: str = "error", description: str = "problem", kind: str = "unconnected"
 ) -> dict[str, Any]:
-    return {"type": kind, "severity": severity, "message": message, "at": {"x": 1, "y": 2}}
+    """One violation as KiCad writes it: a description plus per-item positions.
+
+    There is no ``message`` and no ``at``; a fixture using those names would let
+    a report that reads the wrong keys pass unnoticed.
+    """
+    return {
+        "type": kind,
+        "severity": severity,
+        "description": description,
+        "items": [{"description": "a thing", "pos": {"x": 1.0, "y": 2.0}, "uuid": "u-1"}],
+    }
 
 
 @pytest.fixture(autouse=True)

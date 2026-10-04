@@ -78,7 +78,10 @@ class TestKicadCliReports:
             json.loads(result.stdout)
         assert "Saved ERC Report" in result.stdout
 
-    def test_erc_json_report_has_no_erc_violation_key(self, kicad_cli_required, tmp_path):
+    def test_erc_report_nests_violations_under_sheets(self, kicad_cli_required, tmp_path):
+        # Read the shape off a real report rather than trusting the docs: KiCad 10
+        # writes metadata at the top level and the violations per sheet, with no
+        # top-level "violations" key at all.
         report = tmp_path / "erc.json"
         result = run_cli(
             kicad_cli_required,
@@ -88,9 +91,65 @@ class TestKicadCliReports:
 
         assert result.returncode == 0
         data = json.loads(report.read_text(encoding="utf-8"))
-        # parse_erc_report() looks for "erc_violation"; KiCad never emits it.
-        assert "erc_violation" not in data
-        assert parse_erc_report(report.read_text(encoding="utf-8")) == []
+
+        assert "violations" not in data
+        assert isinstance(data["sheets"], list)
+        assert data["sheets"], "every sheet is reported, even a clean one"
+
+    def test_parse_erc_report_agrees_with_the_raw_report(self, kicad_cli_required, tmp_path):
+        # The invariant that matters: whatever the report holds, the parser
+        # returns exactly that many violations, counted across every sheet. A
+        # parser that only looks at the top level returns 0 here and passes a
+        # schematic with errors on it.
+        report = tmp_path / "erc.json"
+        run_cli(
+            kicad_cli_required,
+            ["sch", "erc", "--format", "json", "-o", str(report), str(DEMO_SCHEMATIC)],
+            tmp_path,
+        )
+
+        data = json.loads(report.read_text(encoding="utf-8"))
+        expected = sum(len(sheet["violations"]) for sheet in data["sheets"])
+
+        assert len(parse_erc_report(report.read_text(encoding="utf-8"))) == expected
+
+    def test_parse_erc_report_finds_violations_in_a_real_report(self, kicad_cli_required, tmp_path):
+        # The demo design is clean, so it cannot show the parser finding
+        # anything. This sheet has one resistor with both pins floating, which
+        # KiCad reports as errors, and it embeds its own library symbol so it
+        # needs no project around it.
+        dirty = Path(__file__).resolve().parent / "fixtures" / "erc_violations.kicad_sch"
+        report = tmp_path / "dirty.json"
+        result = run_cli(
+            kicad_cli_required,
+            ["sch", "erc", "--format", "json", "-o", str(report), str(dirty)],
+            tmp_path,
+        )
+
+        assert result.returncode == 0
+        violations = parse_erc_report(report.read_text(encoding="utf-8"))
+
+        assert violations, "a real report with errors must not parse as clean"
+        assert any(v["severity"] == "error" for v in violations)
+        # Positions live in items[*].pos; nothing is named "message" or "at".
+        assert violations[0]["items"]
+        assert "message" not in violations[0]
+
+    def test_erc_check_fails_on_a_sheet_that_really_has_errors(self, kicad_cli_required, tmp_path):
+        dirty = Path(__file__).resolve().parent / "fixtures" / "erc_violations.kicad_sch"
+        ctx = DesignContext(
+            schematic_path=dirty,
+            kicad_cli_path=str(kicad_cli_required),
+        )
+        try:
+            result = ERCRunCheck(severity="error").run(ctx)
+        finally:
+            ctx.close()
+
+        assert result.is_fail
+        assert result.details["total_violations"] > 0
+        assert result.details["violations"][0]["description"]
+        assert result.details["violations"][0]["sheet"] == "/"
 
     def test_drc_json_report_has_no_drc_violation_key(
         self, kicad_cli_required, demo_board_required, tmp_path

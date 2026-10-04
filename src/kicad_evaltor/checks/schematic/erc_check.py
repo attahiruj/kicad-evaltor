@@ -10,6 +10,7 @@ from kicad_evaltor.utils.kicad_cli import (
     filter_violations_by_severity,
     parse_erc_report,
     report_workspace,
+    violation_details,
 )
 
 
@@ -66,16 +67,7 @@ class ERCRunCheck(Check[ERCRunParams]):
                 filtered_violations=0,
             )
 
-        details = []
-        for v in filtered:
-            details.append(
-                {
-                    "type": v.get("type"),
-                    "severity": v.get("severity"),
-                    "message": v.get("message"),
-                    "at": v.get("at"),
-                }
-            )
+        details = [violation_details(v) for v in filtered]
 
         return CheckResult.fail(
             self.id,

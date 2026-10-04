@@ -449,7 +449,7 @@ class TestERCRunCheck:
         assert result.is_fail
         assert result.details["total_violations"] == 2
         assert result.details["filtered_violations"] == 1
-        assert result.details["violations"][0]["message"] == "pin not driven"
+        assert result.details["violations"][0]["description"] == "pin not driven"
 
     def test_severity_all_includes_warnings(self):
         ctx = ctx_with(
