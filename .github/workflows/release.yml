@@ -29,6 +29,11 @@ on:
 
 permissions:
   contents: read
+  # Trusted publishing authenticates the upload with a short-lived OIDC token
+  # rather than a stored secret, and minting that token needs this. Without it
+  # every step below passes and only Publish fails, with an error about
+  # ACTIONS_ID_TOKEN_REQUEST_TOKEN rather than about credentials.
+  id-token: write
 
 jobs:
   publish:
