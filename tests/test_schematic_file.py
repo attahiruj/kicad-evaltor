@@ -13,7 +13,7 @@ from kicad_evaltor.schematic_file import (
     load_schematic,
     to_dict,
 )
-from kicad_evaltor.sexpr import child, children, head, parse, value_of
+from kicad_evaltor.sexpr import child, children, head, is_hidden, parse, value_of
 from conftest import demo_schematic_path
 
 DEMO_SCHEMATIC = demo_schematic_path()
@@ -104,6 +104,45 @@ class TestAccessors:
 
     def test_value_of_non_string_returns_default(self):
         assert value_of(["lib_id", ["nested"]], 1) == ""
+
+
+class TestIsHidden:
+    """The flag lives in two places, and a caller should not have to know which."""
+
+    def test_finds_the_flag_beside_the_node(self):
+        # A symbol field and a symbol pin carry it as a direct child.
+        assert is_hidden(parse('(property "Reference" "R1" (at 1 2 0) (hide yes))'))
+
+    def test_finds_the_flag_inside_the_effects_block(self):
+        # Everything built on a TEXT_EFFECTS block keeps it in there instead.
+        assert is_hidden(parse('(label "N" (at 1 2 0) (effects (font (size 1.27)) (hide yes)))'))
+
+    def test_an_ordinary_node_is_not_hidden(self):
+        assert not is_hidden(parse('(label "N" (at 1 2 0) (effects (font (size 1.27))))'))
+
+    def test_a_bare_hide_flag_counts_as_hidden(self):
+        # The grammar allows `(hide)` with no value.
+        assert is_hidden(parse("(label (effects (hide)))"))
+
+    def test_hide_no_is_not_hidden(self):
+        # The value decides, not the presence of the token: a third-party
+        # generator may spell an explicit "not hidden".
+        assert not is_hidden(parse('(property "R" "1" (hide no))'))
+        assert not is_hidden(parse("(label (effects (hide no)))"))
+
+    def test_a_field_with_no_hide_at_all_is_not_hidden(self):
+        assert not is_hidden(parse('(property "Reference" "R1" (at 1 2 0))'))
+
+    def test_none_and_atoms_are_not_hidden(self):
+        assert not is_hidden(None)
+        assert not is_hidden("hide")
+
+    def test_it_ignores_a_hide_belonging_to_a_different_node(self):
+        # `hide` must be a child of this node or of its effects, not of some
+        # nested child that happens to carry one.
+        node = parse('(label "N" (at 1 2) (effects (font (hide yes)))')
+
+        assert not is_hidden(node)
 
 
 class TestFileSchematicSymbols:

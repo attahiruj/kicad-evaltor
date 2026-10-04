@@ -448,3 +448,68 @@ class TestMissingInputs:
         for check_id in ALL:
             result = CheckRegistry.create(check_id).run(empty)
             assert result.status is Status.SKIP, check_id
+
+
+# Two notes drawn on the same spot, one of them hidden, and a hidden label doing
+# the same. A symbol field carries `(hide yes)` beside itself; these carry it
+# inside the effects block, which is a different place to look.
+TWO_DRAWN_NOTES = """(kicad_sch (version 20250114) (generator "evaltor")
+  (paper "A4")
+  (lib_symbols)
+  (text "FIRST" (at 50 50 0) (effects (font (size 1.27 1.27))))
+  (text "SECOND" (at 50 50 0) (effects (font (size 1.27 1.27))))
+)
+"""
+
+TWO_DRAWN_NOTES_PLUS_HIDDEN = """(kicad_sch (version 20250114) (generator "evaltor")
+  (paper "A4")
+  (lib_symbols)
+  (text "FIRST" (at 50 50 0) (effects (font (size 1.27 1.27))))
+  (text "SECOND" (at 50 50 0) (effects (font (size 1.27 1.27))))
+  (text "HIDDEN NOTE" (at 50 50 0) (effects (font (size 1.27 1.27)) (hide yes)))
+  (label "HIDDEN LABEL" (at 50 50 0)
+    (effects (font (size 1.27 1.27)) (hide yes)))
+  (global_label "HIDDEN GLOBAL" (shape input) (at 50 50 0)
+    (effects (font (size 1.27 1.27)) (hide yes)))
+  (hierarchical_label "HIDDEN HIER" (shape input) (at 50 50 0)
+    (effects (font (size 1.27 1.27)) (hide yes)))
+)
+"""
+
+# A note parked well outside the A4 page, hidden.
+HIDDEN_OFF_SHEET = """(kicad_sch (version 20250114) (generator "evaltor")
+  (paper "A4")
+  (lib_symbols)
+  (text "HIDDEN OFF SHEET" (at 900 900 0)
+    (effects (font (size 1.27 1.27)) (hide yes)))
+)
+"""
+
+
+class TestHiddenTextIsNotInk:
+    """Hidden text draws nothing, so it cannot overlap anything.
+
+    These are the reported symptom: a note the author hid still landing in the
+    scene, and the layout checks reporting overlaps between text no reader can
+    see and text they can.
+    """
+
+    @staticmethod
+    def _count(tmp_path, check_id: str, source: str) -> int:
+        path = tmp_path / f"{check_id}.kicad_sch"
+        path.write_text(source, encoding="utf-8")
+        with DesignContext(schematic_path=path) as ctx:
+            result = CheckRegistry.create(check_id).run(ctx)
+        return result.details.get("count", 0)
+
+    def test_the_two_drawn_notes_collide(self, tmp_path):
+        assert self._count(tmp_path, TEXT_TEXT, TWO_DRAWN_NOTES) == 1
+
+    def test_adding_hidden_text_changes_nothing(self, tmp_path):
+        # Same single collision between the two visible notes. The three hidden
+        # items sit on the same spot, so a scene that kept them would report
+        # more than one finding here.
+        assert self._count(tmp_path, TEXT_TEXT, TWO_DRAWN_NOTES_PLUS_HIDDEN) == 1
+
+    def test_hidden_text_off_the_page_is_not_an_off_sheet_finding(self, tmp_path):
+        assert self._count(tmp_path, TEXT_OFF_SHEET, HIDDEN_OFF_SHEET) == 0

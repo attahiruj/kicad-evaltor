@@ -319,3 +319,60 @@ class TestDegenerateInput:
         assert len(pins) == 1
         assert pins[0].length == 2.54
         assert pins[0].angle == 180.0
+
+
+# Free-standing text and labels, one visible and one hidden of each kind. A
+# symbol field carries `(hide yes)` beside itself; these carry it inside the
+# effects block, which is a different place to look.
+VISIBLE_AND_HIDDEN_TEXT = """(kicad_sch (version 20250114) (generator "evaltor")
+  (paper "A4")
+  (lib_symbols)
+  (text "drawn note" (at 50 50 0) (effects (font (size 1.27 1.27))))
+  (text "hidden note" (at 52 50 0) (effects (font (size 1.27 1.27)) (hide yes)))
+  (label "DRAWN" (at 54 50 0) (effects (font (size 1.27 1.27))))
+  (label "HIDDEN" (at 56 50 0) (effects (font (size 1.27 1.27)) (hide yes)))
+  (global_label "GDRAWN" (shape input) (at 58 50 0)
+    (effects (font (size 1.27 1.27))))
+  (global_label "GHIDDEN" (shape input) (at 60 50 0)
+    (effects (font (size 1.27 1.27)) (hide yes)))
+  (hierarchical_label "HDRAWN" (shape input) (at 62 50 0)
+    (effects (font (size 1.27 1.27))))
+  (hierarchical_label "HHIDDEN" (shape input) (at 64 50 0)
+    (effects (font (size 1.27 1.27)) (hide yes)))
+)
+"""
+
+
+class TestHiddenText:
+    """Hidden text puts no ink on the sheet, so it is not part of the geometry.
+
+    Every kind here carries ``(hide yes)`` inside its effects block. Reading only
+    a direct child would find none of them, and the scene would claim text no
+    reader can see.
+    """
+
+    @pytest.fixture
+    def scene(self, tmp_path):
+        path = tmp_path / "hidden_text.kicad_sch"
+        path.write_text(VISIBLE_AND_HIDDEN_TEXT, encoding="utf-8")
+        return extract(load_schematic(path))
+
+    def test_every_hidden_kind_is_dropped(self, scene):
+        contents = {item.content for item in scene.texts}
+
+        assert not {"hidden note", "HIDDEN", "GHIDDEN", "HHIDDEN"} & contents
+
+    def test_every_visible_kind_is_kept(self, scene):
+        contents = {item.content for item in scene.texts}
+
+        assert {"drawn note", "DRAWN", "GDRAWN", "HDRAWN"} <= contents
+
+    def test_the_field_keeps_saying_which_kind_it_was(self, scene):
+        kinds = {item.field for item in scene.texts}
+
+        assert kinds == {"text", "label", "global_label", "hierarchical_label"}
+
+    def test_hidden_text_is_not_left_as_a_standalone_item(self, scene):
+        # standalone_texts is what the off-sheet check walks, so a hidden note
+        # parked off the page must not turn into a finding.
+        assert all("hidden" not in item.content.lower() for item in scene.standalone_texts)
