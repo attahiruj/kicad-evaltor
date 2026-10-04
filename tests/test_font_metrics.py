@@ -2,25 +2,24 @@
 
 The expected values come from ``_stroke_font_data.json``, which was measured by
 rendering probe text through the installed KiCad. These tests check the derived
-behaviour (composition, justification, rotation) rather than re-deriving the
+behaviour (composition, justification, anchoring) rather than re-deriving the
 measurements themselves.
 """
-
-import math
 
 import pytest
 
 from kicad_evaltor.font_metrics import (
     advance_width,
+    descent_em,
     glyph,
     line_height,
     source_kicad_version,
     supported,
     text_bbox,
     text_box_width,
+    text_cell_bbox,
     text_extents,
 )
-from kicad_evaltor.geometry import Placement
 
 SIZE = 2.54
 
@@ -125,43 +124,34 @@ class TestAdvanceAndBoxWidth:
 
 
 class TestJustification:
-    def test_left_bottom_puts_the_baseline_at_the_anchor(self):
-        box = text_bbox("M", SIZE, Placement(10.0, 20.0), "left", "bottom")
-        extents = text_extents("M", SIZE)
+    def test_left_and_right_both_pin_the_cell_left_edge(self):
+        left = text_cell_bbox("Mg", SIZE, (10.0, 20.0), "left", "bottom")
+        right = text_cell_bbox("Mg", SIZE, (10.0, 20.0), "right", "bottom")
 
-        # "M" has no descender, so its baseline-relative bottom sits on zero and
-        # the box lands exactly on the anchor line.
-        assert box.min_x == pytest.approx(10.0 + extents[0])
-        assert box.max_y == pytest.approx(20.0)
+        assert left.min_x == pytest.approx(10.0)
+        assert right.min_x == pytest.approx(10.0)
 
-    def test_right_justification_renders_like_left(self):
-        # KiCad pins right-justified fields at the left edge of the text cell:
-        # measured against KiCad 10.0.1's renderer, Y1's right-justified
-        # reference and value carry the same left padding as left-justified
-        # fields.
-        left = text_bbox("Mg", SIZE, Placement(0.0, 0.0), "left", "bottom")
-        right = text_bbox("Mg", SIZE, Placement(0.0, 0.0), "right", "bottom")
+    def test_bottom_pins_the_cell_bottom_on_the_anchor(self):
+        cell = text_cell_bbox("M", SIZE, (10.0, 20.0), "left", "bottom")
 
-        assert right == left
+        assert cell.max_y == pytest.approx(20.0)
+        assert cell.min_y == pytest.approx(20.0 - line_height(SIZE))
 
-    def test_top_pins_the_glyph_top_on_the_anchor(self):
-        bottom = text_bbox("M", SIZE, Placement(0.0, 0.0), "left", "bottom")
-        top = text_bbox("M", SIZE, Placement(0.0, 0.0), "left", "top")
+    def test_top_pins_the_cell_top_on_the_anchor(self):
+        cell = text_cell_bbox("M", SIZE, (0.0, 0.0), "left", "top")
 
-        assert top.min_y == pytest.approx(0.0)
-        assert bottom.max_y == pytest.approx(0.0)
-        assert top.max_y == pytest.approx(text_extents("M", SIZE)[1])
+        assert cell.min_y == pytest.approx(0.0)
+        assert cell.max_y == pytest.approx(line_height(SIZE))
 
-    def test_default_centres_the_box_on_the_anchor(self):
-        box = text_bbox("Mg", SIZE, Placement(0.0, 0.0))
+    def test_default_centres_the_cell_on_the_anchor(self):
+        cell = text_cell_bbox("Mg", SIZE, (5.0, 5.0))
 
-        # Centring aligns the text box, not the ink, so the ink centre can sit
-        # a hair off zero where the glyph bearings are asymmetric.
-        assert box.center[0] == pytest.approx(0.0, abs=1e-3)
+        assert cell.center[0] == pytest.approx(5.0)
+        assert cell.center[1] == pytest.approx(5.0)
 
     def test_explicit_center_matches_the_default(self):
-        default = text_bbox("Mg", SIZE, Placement(5.0, 5.0))
-        centered = text_bbox("Mg", SIZE, Placement(5.0, 5.0), "center", "middle")
+        default = text_bbox("Mg", SIZE, (5.0, 5.0))
+        centered = text_bbox("Mg", SIZE, (5.0, 5.0), "center", "middle")
 
         assert default == centered
 
@@ -178,78 +168,98 @@ class TestJustification:
             text_bbox("M", 0.0)
 
 
-class TestPlacementInteraction:
-    def test_translation_only(self):
-        origin = text_bbox("U1", SIZE, Placement(0.0, 0.0), "left", "bottom")
-        moved = text_bbox("U1", SIZE, Placement(50.0, 60.0), "left", "bottom")
+class TestAnchorInteraction:
+    def test_the_anchor_is_a_pure_translation(self):
+        origin = text_bbox("U1", SIZE, (0.0, 0.0), "left", "bottom")
+        moved = text_bbox("U1", SIZE, (50.0, 60.0), "left", "bottom")
 
         assert moved.min_x == pytest.approx(origin.min_x + 50.0)
         assert moved.min_y == pytest.approx(origin.min_y + 60.0)
 
-    def test_rotation_swaps_the_box_dimensions_for_upright_text(self):
-        upright = text_bbox("MMMM", SIZE, Placement(0.0, 0.0), "left", "bottom")
-        turned = text_bbox("MMMM", SIZE, Placement(0.0, 0.0, rotation=90.0), "left", "bottom")
+    def test_the_anchor_does_not_resize_the_box(self):
+        origin = text_bbox("MMMM", SIZE, (0.0, 0.0), "left", "bottom")
+        moved = text_bbox("MMMM", SIZE, (25.0, 40.0), "left", "bottom")
 
-        assert turned.width == pytest.approx(upright.height)
-        assert turned.height == pytest.approx(upright.width)
+        # KiCad draws field text flat at the position the field stores, so the
+        # stored angle never reaches the glyphs.
+        assert moved.width == pytest.approx(origin.width)
+        assert moved.height == pytest.approx(origin.height)
 
-    def test_rotation_keeps_the_same_area(self):
-        upright = text_bbox("R1", SIZE, Placement(10.0, 10.0), "left", "bottom")
-        turned = text_bbox("R1", SIZE, Placement(10.0, 10.0, rotation=270.0), "left", "bottom")
+    def test_ink_stays_above_the_cell_bottom(self):
+        box = text_bbox("U1", SIZE, (0.0, 0.0), "left", "bottom")
 
-        assert turned.area == pytest.approx(upright.area)
-
-    def test_mirror_x_reflects_about_the_anchor(self):
-        anchor_y = 100.0
-        plain = text_bbox("Mg", SIZE, Placement(100.0, anchor_y), "left", "bottom")
-        mirrored = text_bbox("Mg", SIZE, Placement(100.0, anchor_y, mirror="x"), "left", "bottom")
-
-        # Reflection is about the anchor's horizontal line, not about zero.
-        assert mirrored.center[1] == pytest.approx(2 * anchor_y - plain.center[1])
-        assert mirrored.center[0] == pytest.approx(plain.center[0])
-
-    def test_ink_stays_above_the_anchor_for_bottom_justification(self):
-        box = text_bbox("U1", SIZE, Placement(0.0, 0.0), "left", "bottom")
-        # Sheet y grows downward, so ink above the anchor has a negative min_y.
+        # Sheet y grows downward, so ink above the anchor has a negative min_y,
+        # and bottom justification leaves the cell's descent room below the
+        # baseline so the ink stops short of the anchor.
         assert box.min_y < 0
-        assert box.max_y == pytest.approx(0.0)
+        assert box.max_y == pytest.approx(-descent_em() * SIZE)
+
+
+class TestLineCell:
+    """The cell is what KiCad reserves, so it sets every collision box."""
+
+    def test_cell_is_one_stroke_thickness_wider_than_the_advances(self):
+        cell = text_cell_bbox("Mg", SIZE, justify_h="left")
+
+        assert cell.width == pytest.approx(advance_width("Mg", SIZE) + 0.2, abs=0.01)
+
+    def test_cell_is_one_line_height_tall(self):
+        cell = text_cell_bbox("Mg", SIZE)
+
+        assert cell.height == pytest.approx(line_height(SIZE))
+
+    def test_ink_is_inside_the_cell_across_its_width(self):
+        # KiCad's line cell is 1.17 em tall, less than the 1.333 em a cap-to-
+        # descender run needs, so ink overhangs the top and bottom edges. It
+        # never does so sideways: the cell carries the advances plus a stroke.
+        for justify_h in ("left", "center"):
+            for justify_v in ("top", "middle", "bottom"):
+                cell = text_cell_bbox("Mg", SIZE, (7.0, 11.0), justify_h, justify_v)
+                ink = text_bbox("Mg", SIZE, (7.0, 11.0), justify_h, justify_v)
+
+                assert ink.min_x >= cell.min_x, (justify_h, justify_v)
+                assert ink.max_x <= cell.max_x, (justify_h, justify_v)
+
+    def test_top_and_bottom_shift_ink_by_the_line_height(self):
+        bottom = text_bbox("M", SIZE, (0.0, 0.0), "left", "bottom")
+        top = text_bbox("M", SIZE, (0.0, 0.0), "left", "top")
+
+        # This is the shift the calibration measured between the two probes. It
+        # is a line height rather than a glyph height, which is how the cell shows
+        # itself: a top-justified run hangs below its anchor, a bottom-justified
+        # one above it.
+        assert top.min_y - bottom.min_y == pytest.approx(line_height(SIZE))
 
 
 class TestAgainstMeasuredProbe:
-    """Values read straight off the calibration sheet's rendered SVG."""
+    """Values read straight off the calibration sheet's rendered SVG.
 
-    def test_mg_ink_matches_the_rendered_run(self):
-        # "Mg" at size 2.54, left/bottom justified, measured in the calibration.
-        box = text_bbox("Mg", SIZE, Placement(0.0, 0.0), "left", "bottom")
+    Em units with y growing upward, from the ``justification`` block of
+    ``_stroke_font_data.json``.
+    """
 
-        assert box.min_x == pytest.approx(0.2775 * SIZE, abs=0.01)
-        assert box.max_x == pytest.approx(1.8490 * SIZE, abs=0.01)
-        # "bottom" pins the baseline on the anchor, so the descender of "g" is
-        # the only ink beyond it.
-        assert box.max_y == pytest.approx(0.0)
-        assert box.min_y == pytest.approx(-1.3333 * SIZE, abs=0.01)
+    def test_left_bottom_ink_matches_the_rendered_run(self):
+        # "MMg" at size 2.54, left/bottom justified.
+        box = text_bbox("MMg", SIZE, (0.0, 0.0), "left", "bottom")
 
-    def test_mg_right_justified_matches_the_rendered_run(self):
-        box = text_bbox("Mg", SIZE, Placement(0.0, 0.0), "right", "bottom")
+        assert box.min_x == pytest.approx(0.277520 * SIZE, abs=1e-3)
+        assert box.max_x == pytest.approx(2.991850 * SIZE, abs=1e-3)
+        assert box.min_y == pytest.approx(-1.223976 * SIZE, abs=1e-3)
+        assert box.max_y == pytest.approx(0.109370 * SIZE, abs=1e-3)
 
-        assert box.min_x == pytest.approx(0.2775 * SIZE, abs=0.01)
-        assert box.max_x == pytest.approx(1.8490 * SIZE, abs=0.01)
+    def test_default_ink_matches_the_rendered_run(self):
+        # "Mg" at size 2.54 with no justification, centred on its anchor.
+        box = text_bbox("Mg", SIZE, (0.0, 0.0))
 
-    def test_mg_default_is_centred_like_the_rendered_run(self):
-        box = text_bbox("Mg", SIZE, Placement(0.0, 0.0))
+        assert box.min_x == pytest.approx(-0.785748 * SIZE, abs=1e-3)
+        assert box.max_x == pytest.approx(0.785709 * SIZE, abs=1e-3)
+        assert box.min_y == pytest.approx(-0.638976 * SIZE, abs=1e-3)
+        assert box.max_y == pytest.approx(0.694370 * SIZE, abs=1e-3)
 
-        assert box.min_x == pytest.approx(-0.7857 * SIZE, abs=0.01)
-        assert box.max_x == pytest.approx(0.7857 * SIZE, abs=0.01)
-
-    def test_m_left_top_matches_the_rendered_run(self):
-        box = text_bbox("M", SIZE, Placement(0.0, 0.0), "left", "top")
-
-        # "top" pins the glyph's top edge on the anchor.
-        assert box.min_y == pytest.approx(0.0)
-        assert box.max_y == pytest.approx(1.0000 * SIZE, abs=0.01)
-
-    def test_line_height_matches_the_rendered_shift(self):
-        bottom = text_bbox("M", SIZE, Placement(0.0, 0.0), "left", "bottom")
-        top = text_bbox("M", SIZE, Placement(0.0, 0.0), "left", "top")
-
-        assert math.isclose(top.max_y - bottom.min_y, 2.0 * SIZE, rel_tol=0.02)
+    def test_the_descender_is_what_moves_an_unjustified_cell(self):
+        # Centred text is justified by its cell, so a string with a descender
+        # has its baseline below the anchor: "Mg" puts its baseline 0.361 em
+        # under, against "M" alone at 0.285 em.
+        assert text_bbox("Mg", SIZE).max_y - text_bbox("M", SIZE).max_y == pytest.approx(
+            0.333346 * SIZE, abs=1e-3
+        )

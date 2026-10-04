@@ -57,6 +57,63 @@ class TestMargin:
         assert len(colliding_pairs([a, b], margin=0.3)) == 1
 
 
+class TestClearance:
+    """A clearance is a gap between two boxes, not a growth of either one."""
+
+    def test_a_gap_wider_than_the_clearance_is_left_alone(self):
+        a, b = item("a", 0, 0, 2, 2), item("b", 2.21, 0, 4, 2)
+        assert colliding_pairs([a, b], clearance=0.2) == []
+
+    def test_a_gap_just_under_the_clearance_is_caught(self):
+        a, b = item("a", 0, 0, 2, 2), item("b", 2.19, 0, 4, 2)
+        assert len(colliding_pairs([a, b], clearance=0.2)) == 1
+
+    def test_a_gap_exactly_at_the_clearance_is_left_alone(self):
+        a, b = item("a", 0, 0, 2, 2), item("b", 2.2, 0, 4, 2)
+        assert colliding_pairs([a, b], clearance=0.2) == []
+
+    def test_the_gap_is_reported_with_the_finding(self):
+        a, b = item("a", 0, 0, 2, 2), item("b", 2.19, 0, 4, 2)
+        found = colliding_pairs([a, b], clearance=0.2)
+        assert found[0].gap == pytest.approx(0.19)
+        assert found[0].as_dict()["gap"] == pytest.approx(0.19)
+
+    def test_a_near_miss_points_at_where_they_would_touch(self):
+        a, b = item("a", 0, 0, 2, 2), item("b", 2.19, 0, 4, 2)
+        area = colliding_pairs([a, b], clearance=0.2)[0].area
+        assert (area.min_x, area.max_x) == (2.0, 2.19)
+        assert (area.min_y, area.max_y) == (0.0, 2.0)
+
+    def test_diagonal_near_misses_are_measured_on_the_diagonal(self):
+        # 0.1mm apart on each axis is 0.141mm away, which is inside the
+        # clearance. Reporting the smaller axis gap would call it 0.1mm.
+        a, b = item("a", 0, 0, 2, 2), item("b", 2.1, 2.1, 4, 4)
+        found = colliding_pairs([a, b], clearance=0.2)
+        assert len(found) == 1
+        assert found[0].gap == pytest.approx(0.1 * 2**0.5)
+
+    def test_a_diagonal_gap_wider_than_the_clearance_is_left_alone(self):
+        a, b = item("a", 0, 0, 2, 2), item("b", 2.15, 2.15, 4, 4)
+        assert colliding_pairs([a, b], clearance=0.2) == []
+
+    def test_contact_is_caught_because_it_leaves_no_gap(self):
+        a, b = item("a", 0, 0, 2, 2), item("b", 2.0, 0, 4, 2)
+        found = colliding_pairs([a, b], clearance=0.2)
+        assert len(found) == 1
+        assert found[0].gap == 0.0
+
+    def test_zero_clearance_is_overlap_only(self):
+        a, b = item("a", 0, 0, 2, 2), item("b", 2.19, 0, 4, 2)
+        assert colliding_pairs([a, b], clearance=0.0) == []
+
+    def test_a_clearance_and_a_margin_both_apply(self):
+        # A negative margin shrinks the boxes first, so the pair that a 0.2
+        # clearance catches needs a wider margin to survive it.
+        a, b = item("a", 0, 0, 2, 2), item("b", 2.19, 0, 4, 2)
+        assert colliding_pairs([a, b], clearance=0.2)
+        assert colliding_pairs([a, b], clearance=0.2, margin=-0.1) == []
+
+
 class TestOwnerFiltering:
     def test_same_owner_pairs_are_dropped(self):
         a = item("a", 0, 0, 2, 2, owner="R1")

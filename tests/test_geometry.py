@@ -1,9 +1,9 @@
 """Tests for the geometry primitives.
 
-The placement cases are taken from a probe schematic rendered by KiCad 10.0.1:
-an asymmetric symbol placed at 0/90/180/270 degrees, with the resulting
-rectangle corners and pin segments measured out of the exported SVG. Those
-measured values are the oracle, so a sign error in the rotation cannot pass.
+The placement cases are the oracle for the transform: a copy of the demo sheet's
+J1 connector was rendered by the installed KiCad with each orientation, and the
+drawn pin lines were read back out of the exported SVG. Those measured endpoints
+are hard-coded below, so a sign error in the y flip or the rotation cannot pass.
 """
 
 import math
@@ -17,20 +17,57 @@ from kicad_evaltor.geometry import (
     rotate_point,
 )
 
-# Sheet-space body rectangle relative to the anchor, as rendered by KiCad.
-# The renderer flips y, so these were read back out of the SVG with the flip
-# undone; they are the oracle for the rotation convention.
-PROBE_BODY = {
-    0.0: (0.0, 0.0, 4.0, 2.0),
-    90.0: (-2.0, 0.0, 0.0, 4.0),
-    180.0: (-4.0, -2.0, 0.0, 0.0),
-    270.0: (0.0, -4.0, 2.0, 0.0),
+# Connector_Generic:Conn_01x02, as the demo sheet uses it: both pins on the
+# library-local left at y 0 and y -2.54, each 3.81 mm long and running toward
+# the body. Measured pin lines in sheet coordinates, for a symbol placed at
+# (102.87, 104.14).
+ANCHOR = (102.87, 104.14)
+LOCAL_PIN_1 = (-5.08, 0.0)
+LOCAL_PIN_2 = (-5.08, -2.54)
+PIN_LENGTH = 3.81
+
+PROBE_PINS = {
+    0.0: (
+        ((97.79, 104.14), (101.6, 104.14)),
+        ((97.79, 106.68), (101.6, 106.68)),
+    ),
+    90.0: (
+        ((102.87, 109.22), (102.87, 105.41)),
+        ((105.41, 109.22), (105.41, 105.41)),
+    ),
+    180.0: (
+        ((107.95, 104.14), (104.14, 104.14)),
+        ((107.95, 101.6), (104.14, 101.6)),
+    ),
+    270.0: (
+        ((102.87, 99.06), (102.87, 102.87)),
+        ((100.33, 99.06), (100.33, 102.87)),
+    ),
 }
 
-LOCAL_BODY = BBox(0.0, 0.0, 4.0, 2.0)
-LOCAL_PIN_CONN = (0.0, 6.0)
-LOCAL_PIN_ANGLE = 270.0
-LOCAL_PIN_LENGTH = 2.54
+PROBE_PINS_MIRRORED = {
+    "y": (
+        ((107.95, 104.14), (104.14, 104.14)),
+        ((107.95, 106.68), (104.14, 106.68)),
+    ),
+    "x": (
+        ((97.79, 104.14), (101.6, 104.14)),
+        ((97.79, 101.6), (101.6, 101.6)),
+    ),
+}
+
+LOCAL_BODY = BBox(-1.27, -3.81, 1.27, 1.27)
+
+
+def _pin_line(placement, local):
+    """The line KiCad draws for a pin: its connection point, then its body end.
+
+    Both connector pins run along their own angle of 0, so the body end is the
+    connection point plus the pin length in x.
+    """
+    connection = placement.apply(*local)
+    body = placement.apply(local[0] + PIN_LENGTH, local[1])
+    return (connection, body)
 
 
 class TestRotatePoint:
@@ -132,9 +169,15 @@ class TestBBox:
     def test_clearance_of_touching_boxes_is_zero(self):
         assert BBox(0.0, 0.0, 1.0, 1.0).clearance(BBox(1.0, 0.0, 2.0, 1.0)) == 0.0
 
-    def test_clearance_takes_the_smaller_axis_gap(self):
-        # 2mm apart in x, 5mm in y; the nearest approach is 2mm.
-        assert BBox(0.0, 0.0, 1.0, 1.0).clearance(BBox(3.0, 6.0, 4.0, 7.0)) == 2.0
+    def test_clearance_along_one_axis_is_that_gap(self):
+        assert BBox(0.0, 0.0, 1.0, 1.0).clearance(BBox(3.0, 0.0, 4.0, 1.0)) == 2.0
+
+    def test_clearance_across_both_axes_is_the_nearest_corner(self):
+        # 2mm apart in x and 5mm in y, so the closest points are 5.385mm apart.
+        # Taking the smaller gap would report two boxes 5mm up as nearly touching.
+        assert BBox(0.0, 0.0, 1.0, 1.0).clearance(BBox(3.0, 6.0, 4.0, 7.0)) == pytest.approx(
+            math.hypot(2.0, 5.0)
+        )
 
     def test_inflate(self):
         assert BBox(0.0, 0.0, 1.0, 1.0).inflate(0.5) == BBox(-0.5, -0.5, 1.5, 1.5)
@@ -155,35 +198,45 @@ class TestBBox:
 
 
 class TestPlacementMatchesRenderedKicad:
-    """The oracle: rectangles KiCad 10.0.1 actually drew for the probe."""
+    """The oracle: pin lines KiCad actually drew for this connector."""
 
     @pytest.mark.parametrize("angle", [0.0, 90.0, 180.0, 270.0])
-    def test_body_rectangle_matches_rendered_output(self, angle):
-        placement = Placement(0.0, 0.0, rotation=angle)
+    def test_pin_lines_match_rendered_output(self, angle):
+        placement = Placement(*ANCHOR, rotation=angle)
+
+        drawn = PROBE_PINS[angle]
+        for local, expected in zip((LOCAL_PIN_1, LOCAL_PIN_2), drawn):
+            connection, body = _pin_line(placement, local)
+            assert connection == pytest.approx(expected[0], abs=1e-9)
+            assert body == pytest.approx(expected[1], abs=1e-9)
+
+    @pytest.mark.parametrize("mirror", ["x", "y"])
+    def test_mirrored_placement_matches_rendered_output(self, mirror):
+        placement = Placement(*ANCHOR, mirror=mirror)
+
+        drawn = PROBE_PINS_MIRRORED[mirror]
+        for local, expected in zip((LOCAL_PIN_1, LOCAL_PIN_2), drawn):
+            connection, body = _pin_line(placement, local)
+            assert connection == pytest.approx(expected[0], abs=1e-9)
+            assert body == pytest.approx(expected[1], abs=1e-9)
+
+    @pytest.mark.parametrize("angle", [0.0, 90.0, 180.0, 270.0])
+    def test_a_body_box_lands_where_its_own_corners_do(self, angle):
+        # The outline itself is not in the plot, but it has to travel by the same
+        # transform as the pins that terminate on it.
+        placement = Placement(*ANCHOR, rotation=angle)
         placed = placement.apply_box(LOCAL_BODY)
+        corners = [
+            placement.apply(x, y)
+            for x in (LOCAL_BODY.min_x, LOCAL_BODY.max_x)
+            for y in (LOCAL_BODY.min_y, LOCAL_BODY.max_y)
+        ]
+        assert placed == BBox.from_points(corners)
 
-        expected = PROBE_BODY[angle]
-        assert (
-            placed.min_x,
-            placed.min_y,
-            placed.max_x,
-            placed.max_y,
-        ) == pytest.approx(expected, abs=1e-9)
-
-    @pytest.mark.parametrize("angle", [0.0, 90.0, 180.0, 270.0])
-    def test_pin_endpoints_match_rendered_output(self, angle):
-        radians = math.radians(LOCAL_PIN_ANGLE)
-        local_inner = (
-            LOCAL_PIN_CONN[0] + LOCAL_PIN_LENGTH * math.cos(radians),
-            LOCAL_PIN_CONN[1] + LOCAL_PIN_LENGTH * math.sin(radians),
-        )
-        placement = Placement(0.0, 0.0, rotation=angle)
-
-        conn = placement.apply(*LOCAL_PIN_CONN)
-        inner = placement.apply(*local_inner)
-
-        # Distance between the pin's two ends is preserved under rotation.
-        assert math.dist(conn, inner) == pytest.approx(LOCAL_PIN_LENGTH)
+    def test_every_measured_pin_line_is_the_declared_length(self):
+        for lines in PROBE_PINS.values():
+            for connection, body in lines:
+                assert math.dist(connection, body) == pytest.approx(PIN_LENGTH)
 
 
 class TestPlacement:
@@ -191,21 +244,29 @@ class TestPlacement:
         assert Placement(10.0, 20.0).apply(0.0, 0.0) == (10.0, 20.0)
 
     def test_translation_only(self):
-        assert Placement(10.0, 20.0).apply(1.0, 2.0) == (11.0, 22.0)
+        assert Placement(10.0, 20.0).apply(1.0, 2.0) == (11.0, 18.0)
+
+    def test_local_y_is_flipped_onto_the_sheet(self):
+        # Library-local y grows upwards, so a point below the library origin
+        # lands below the anchor on the sheet, where y also grows downwards.
+        assert Placement(10.0, 20.0).apply(1.0, -2.0) == (11.0, 22.0)
 
     def test_rotation_about_the_anchor(self):
-        assert Placement(10.0, 20.0, rotation=90.0).apply(1.0, 0.0) == (10.0, 21.0)
+        # The file's angle is counter-clockwise on screen, which in a y-down
+        # frame is the negated rotation.
+        assert Placement(10.0, 20.0, rotation=90.0).apply(1.0, 0.0) == (10.0, 19.0)
 
-    def test_mirror_x_flips_y(self):
-        assert Placement(0.0, 0.0, mirror="x").apply(1.0, 2.0) == (1.0, -2.0)
+    def test_mirror_x_flips_local_y(self):
+        # Mirroring about the local x axis cancels the library-to-sheet flip.
+        assert Placement(0.0, 0.0, mirror="x").apply(1.0, 2.0) == (1.0, 2.0)
 
-    def test_mirror_y_flips_x(self):
-        assert Placement(0.0, 0.0, mirror="y").apply(1.0, 2.0) == (-1.0, 2.0)
+    def test_mirror_y_flips_local_x(self):
+        assert Placement(0.0, 0.0, mirror="y").apply(1.0, 2.0) == (-1.0, -2.0)
 
     def test_mirror_applies_before_rotation(self):
-        placement = Placement(0.0, 0.0, rotation=90.0, mirror="x")
-        # local (1, 2) -> mirror -> (1, -2) -> rotate 90 -> (2, 1)
-        assert placement.apply(1.0, 2.0) == (2.0, 1.0)
+        placement = Placement(0.0, 0.0, rotation=90.0, mirror="y")
+        # local (1, 2) -> mirror -> (-1, 2) -> flip -> (-1, -2) -> rotate -90 -> (-2, 1)
+        assert placement.apply(1.0, 2.0) == (-2.0, 1.0)
 
     def test_rejects_unknown_mirror(self):
         with pytest.raises(ValueError, match="mirror"):

@@ -1,17 +1,21 @@
 """Axis-aligned boxes and the placement transform KiCad schematics use.
 
 Everything here works in the coordinate space of a ``.kicad_sch`` file: x to
-the right, y downward, millimetres. Angles are degrees counter-clockwise in
-that same space, which is what a symbol's ``(at x y angle)`` field means.
+the right, y downward, millimetres.
 
-The transform was verified against KiCad 10.0.1 by rendering a probe symbol
-placed at 0/90/180/270 degrees and measuring the exported SVG, so the
-conventions here are observed rather than assumed:
+The conventions, all measured from the installed KiCad by rendering the demo
+sheets and reading back the drawn pin lines, so they are observed rather than
+assumed:
 
-* a local point ``p`` on a symbol placed at ``(ax, ay, angle)`` lands at
-  ``(ax, ay) + rotate(p, angle)``
-* a pin's inner end is ``at + length * (cos angle, sin angle)``, where
-  ``angle`` is the pin's own orientation before the symbol rotation applies
+* symbol geometry is authored with library-local ``y`` growing **upwards**,
+  while the sheet's grows downwards, so every local ``y`` is negated on the way
+  out: a pin at local ``y = -2.54`` lands ``2.54 mm`` *below* its anchor
+* the ``(at x y angle)`` angle is counter-clockwise **on screen**, which is
+  clockwise in a y-down frame, so the applied rotation is ``-angle``
+* a pin's ``at`` is its connection point and the pin runs from there toward the
+  body along its own angle
+* ``(mirror x)`` and ``(mirror y)`` are applied to the library-local point, before
+  the frame conversion and the rotation
 """
 
 from __future__ import annotations
@@ -55,10 +59,11 @@ def rotate_point(x: float, y: float, angle: float) -> Point:
 
 @dataclass(frozen=True)
 class Placement:
-    """Where a symbol sits, and how its local axes are oriented.
+    """Where a symbol sits, and how its library-local axes reach the sheet.
 
-    ``mirror`` follows the schematic file's spelling: ``"x"`` reflects local
-    geometry about the local x axis, ``"y"`` about the local y axis.
+    ``mirror`` follows the schematic file's spelling: ``"x"`` reflects the
+    library-local geometry about its x axis, ``"y"`` about its y axis, both
+    before the frame conversion and the rotation.
     """
 
     x: float
@@ -72,16 +77,26 @@ class Placement:
             raise ValueError(f"mirror must be 'x', 'y' or None, got {self.mirror!r}")
 
     def apply(self, x: float, y: float) -> Point:
-        """Map a local point into sheet coordinates."""
-        if self.mirror == "x":
-            y = -y
-        elif self.mirror == "y":
-            x = -x
-        rx, ry = rotate_point(x, y, self.rotation)
+        """Map a library-local point into sheet coordinates."""
+        rx, ry = self.apply_direction(x, y)
         return (self.x + rx, self.y + ry)
 
+    def apply_direction(self, dx: float, dy: float) -> Point:
+        """Map a library-local direction into sheet coordinates.
+
+        The same mirror, frame conversion and rotation ``apply`` does, without the
+        translation, for the cases where only the heading matters.
+        """
+        if self.mirror == "x":
+            dy = -dy
+        elif self.mirror == "y":
+            dx = -dx
+        # Library y grows upwards and the file's angle is counter-clockwise on
+        # screen, so the heading is flipped before a negated rotation is applied.
+        return rotate_point(dx, -dy, -self.rotation)
+
     def apply_box(self, box: BBox) -> BBox:
-        """Map a local box, which must be axis-aligned, into sheet coordinates.
+        """Map a library-local box, which must be axis-aligned, into sheet coordinates.
 
         A box rotated by anything other than a multiple of 90 degrees is no
         longer axis-aligned, so this returns the bounding box of the four
@@ -166,16 +181,16 @@ class BBox:
         return self.intersection(other) is not None
 
     def clearance(self, other: BBox) -> float:
-        """Shortest gap between the boxes; 0.0 when they touch or overlap.
+        """Shortest distance between the boxes; 0.0 when they touch or overlap.
 
         Touching counts as a clearance of zero, so a caller asking for a
-        positive minimum clearance rejects contact as well as overlap.
+        positive minimum clearance rejects contact as well as overlap. Two boxes
+        separated on both axes are their diagonal apart, not the smaller of the
+        two gaps, so the distance is the hypotenuse.
         """
         gap_x = max(0.0, max(self.min_x, other.min_x) - min(self.max_x, other.max_x))
         gap_y = max(0.0, max(self.min_y, other.min_y) - min(self.max_y, other.max_y))
-        if gap_x == 0.0 and gap_y == 0.0:
-            return 0.0
-        return min(gap_x, gap_y)
+        return math.hypot(gap_x, gap_y)
 
     def inflate(self, margin: float) -> BBox:
         """Grow (or, with a negative margin, shrink) the box on all four sides.

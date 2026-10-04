@@ -13,11 +13,15 @@ The conventions, all confirmed against the calibration sheet, are:
 
 * ``y`` grows downward, matching the schematic file, with the pen origin on the
   text baseline and ``y`` increasing upward from the anchor
-* left/bottom justification puts the pen origin at the anchor
 * right justification shifts by the text box width, which is the sum of the
   advances plus one stroke thickness
 * top justification shifts by one line height
 * an unjustified item is centred on its anchor in both axes
+
+Those three shifts are all explained by one model: KiCad justifies the *line
+cell*, a box as wide as the advances plus one stroke thickness and
+``line_height`` tall, and the ink sits inside that cell wherever its glyph
+bearings put it.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from kicad_evaltor.geometry import BBox, Placement
+from kicad_evaltor.geometry import BBox, Point
 
 _DATA_FILE = Path(__file__).with_name("_stroke_font_data.json")
 
@@ -123,24 +127,16 @@ def text_box_width(content: str, size: float) -> float:
 # KiCad's stroke font sets capital letters exactly one em tall. The calibration
 # measures ink relative to the probe's anchor rather than to the baseline, so
 # every glyph arrives displaced by the same amount; anchoring on "M" recovers
-# the baseline without a hand-fitted constant.
-CAP_HEIGHT_EM = 1.0
+# the baseline without a hand-fitted constant. The same displacement is the room
+# KiCad leaves below the baseline inside the line cell, which is how far the cell
+# has to reach up from its bottom edge to reach the baseline.
+_CAP_HEIGHT_EM = 1.0
 
 
 @lru_cache(maxsize=1)
-def _baseline_shift_em() -> float:
-    return glyph("M").y_top - CAP_HEIGHT_EM
-
-
-@lru_cache(maxsize=1)
-def baseline_offset_em() -> float:
-    """Distance from a vertically centred anchor down to the text baseline, in em."""
-    return float(_data().get("baseline_offset_em", 0.456299))
-
-
-def baseline_y(anchor_y: float, size: float) -> float:
-    """The y coordinate of the baseline for text centred on ``anchor_y``."""
-    return anchor_y + baseline_offset_em() * size
+def descent_em() -> float:
+    """Distance from the bottom of the line cell up to the baseline, in em."""
+    return glyph("M").y_top - _CAP_HEIGHT_EM
 
 
 def text_extents(content: str, size: float) -> tuple[float, float, float, float]:
@@ -150,7 +146,7 @@ def text_extents(content: str, size: float) -> tuple[float, float, float, float]
     and horizontal values to the pen origin. A string with no ink at all, such
     as spaces, still reports its box.
     """
-    shift = _baseline_shift_em()
+    shift = descent_em()
     pen = 0.0
     ink: list[tuple[float, float, float, float]] = []
     for char in content:
@@ -170,50 +166,98 @@ def text_extents(content: str, size: float) -> tuple[float, float, float, float]
     )
 
 
+def _local_cell(
+    content: str,
+    size: float,
+    justify_h: str | None,
+    justify_v: str | None,
+) -> BBox:
+    """The line cell for a run of text, anchored on the origin."""
+    if size <= 0:
+        raise ValueError(f"size must be positive, got {size}")
+
+    width = text_box_width(content, size)
+    height = line_height(size)
+
+    horizontal = (justify_h or "center").lower()
+    # KiCad anchors left- and right-justified text at the left edge of the text
+    # cell; only the unjustified default centres it.
+    if horizontal in ("left", "right"):
+        left = 0.0
+    elif horizontal in ("center", "centre", "middle"):
+        left = -width / 2.0
+    else:
+        raise ValueError(f"unknown horizontal justification {justify_h!r}")
+
+    # Sheet y grows downward, so the cell's top edge is the smaller y. Every
+    # other value is measured from the same anchor KiCad records for the item.
+    vertical = (justify_v or "middle").lower()
+    if vertical == "top":
+        top = 0.0
+    elif vertical == "bottom":
+        top = -height
+    elif vertical in ("middle", "center", "centre"):
+        top = -height / 2.0
+    else:
+        raise ValueError(f"unknown vertical justification {justify_v!r}")
+
+    return BBox(left, top, left + width, top + height)
+
+
+def _translated(box: BBox, at: Point | None) -> BBox:
+    if at is None:
+        return box
+    return BBox(
+        box.min_x + at[0],
+        box.min_y + at[1],
+        box.max_x + at[0],
+        box.max_y + at[1],
+    )
+
+
+def text_cell_bbox(
+    content: str,
+    size: float,
+    at: Point | None = None,
+    justify_h: str | None = None,
+    justify_v: str | None = None,
+) -> BBox:
+    """The box KiCad reserves for a run of text, in sheet coordinates.
+
+    This is the line cell: as wide as the advances plus one stroke thickness, and
+    ``line_height`` tall. Justification moves the cell, not the ink, which is why
+    an unjustified item's ink sits wherever its glyph bearings put it inside a
+    centred cell.
+
+    ``at`` is the sheet anchor, because that is where KiCad stores a field: its
+    position is absolute and its angle is not applied to the glyphs.
+
+    ``justify_h`` is ``left``, ``right``, ``center`` or None for KiCad's
+    centred default; ``justify_v`` is ``top``, ``bottom``, ``middle`` or None.
+    """
+    return _translated(_local_cell(content, size, justify_h, justify_v), at)
+
+
 def text_bbox(
     content: str,
     size: float,
-    placement: Placement | None = None,
+    at: Point | None = None,
     justify_h: str | None = None,
     justify_v: str | None = None,
 ) -> BBox:
     """Ink bounding box of a text run in sheet coordinates.
 
-    Vertical placement is anchored on the baseline. KiCad centres a field's *line
-    cell* rather than its ink, so centring the ink instead would shift text with
-    descenders by a third of an em and report overlaps that are not in the sheet.
+    The ink is placed inside the line cell ``text_cell_bbox`` returns, which is
+    what KiCad justifies. That matters most for vertical placement: a
+    top-justified run starts one line height lower than its ink top suggests,
+    because the cell's top is what the anchor pins.
 
-    ``justify_h`` is ``left``, ``right``, ``center`` or None for KiCad's
-    centred default; ``justify_v`` is ``top``, ``bottom``, ``middle`` or None.
+    ``at``, ``justify_h`` and ``justify_v`` mean what they mean in
+    ``text_cell_bbox``.
     """
-    if size <= 0:
-        raise ValueError(f"size must be positive, got {size}")
-
+    cell = _local_cell(content, size, justify_h, justify_v)
     x0, y_top, x1, y_bottom = text_extents(content, size)
-    box_width = text_box_width(content, size)
-
-    horizontal = (justify_h or "center").lower()
-    # KiCad anchors both `left` and `right` field text at the left edge of the
-    # text cell; only the default centres.
-    if horizontal in ("left", "right"):
-        dx = 0.0
-    elif horizontal in ("center", "centre", "middle"):
-        dx = -box_width / 2.0
-    else:
-        raise ValueError(f"unknown horizontal justification {justify_h!r}")
-
-    # Everything is placed from the baseline, because that is the only point
-    # KiCad actually pins. Sheet y grows downward, so a glyph extent measured
-    # upward from the baseline (y_top, with y_bottom <= 0) is negated here.
-    vertical = (justify_v or "middle").lower()
-    if vertical in ("middle", "center", "centre"):
-        baseline = baseline_y(0.0, size)
-    elif vertical == "top":
-        baseline = y_top
-    elif vertical == "bottom":
-        baseline = y_bottom
-    else:
-        raise ValueError(f"unknown vertical justification {justify_v!r}")
-
-    local = BBox(x0 + dx, baseline - y_top, x1 + dx, baseline - y_bottom)
-    return placement.apply_box(local) if placement is not None else local
+    baseline = cell.max_y - descent_em() * size
+    return _translated(
+        BBox(cell.min_x + x0, baseline - y_top, cell.min_x + x1, baseline - y_bottom), at
+    )

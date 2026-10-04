@@ -2,10 +2,10 @@ import math
 
 import pytest
 
-from kicad_evaltor.font_metrics import advance_width, text_bbox
-from kicad_evaltor.geometry import Placement
+from kicad_evaltor.font_metrics import advance_width, line_height, text_cell_bbox
+from kicad_evaltor.geometry import BBox, Placement
 from kicad_evaltor.schematic_file import load_schematic
-from kicad_evaltor.schematic_items import extract
+from kicad_evaltor.schematic_items import DEFAULT_LINE_WIDTH, extract
 from conftest import demo_schematic_path
 
 DEMO = demo_schematic_path()
@@ -34,6 +34,120 @@ WITH_USER_PROPERTY = """(kicad_sch (version 20250114) (generator "evaltor")
 @pytest.fixture(scope="module")
 def scene():
     return extract(load_schematic(DEMO))
+
+
+def _extract(tmp_path, body: str, name: str = "probe.kicad_sch"):
+    path = tmp_path / name
+    path.write_text(body, encoding="utf-8")
+    return extract(load_schematic(path))
+
+
+# A body rectangle that declares a stroke, plus one pin on its left. The symbol
+# is placed at (50, 50) unrotated, so library-local (x, y) lands at
+# (50 + x, 50 - y).
+STROKED_BODY = """(kicad_sch (version 20250114) (generator "evaltor")
+  (paper "A4")
+  (lib_symbols
+    (symbol "Test:Boxed"
+      (property "Reference" "B?")
+      (symbol "Boxed_0_1"
+        (rectangle (start -1 1) (end 1 -1)
+          (stroke (width 0.254) (type default))
+          (fill (type background))
+        )
+        (pin passive line (at -3.81 0 180) (length 2.54) (name P) (number 1))
+      )
+    )
+  )
+  (symbol (lib_id "Test:Boxed") (at 50 50)
+    (property "Reference" "B1" (at 48 48))
+  )
+)
+"""
+
+# The same body left at KiCad's default width, and a body drawn by a sub-symbol
+# that carries its own offset.
+DEFAULT_WIDTH_BODY = STROKED_BODY.replace(
+    "(width 0.254) (type default)", "(width 0) (type default)"
+)
+OFFSET_BODY = """(kicad_sch (version 20250114) (generator "evaltor")
+  (paper "A4")
+  (lib_symbols
+    (symbol "Test:Stacked"
+      (property "Reference" "B?")
+      (symbol "Stacked_0_1" (offset 2.54 -1.27)
+        (rectangle (start -1 1) (end 1 -1) (stroke (width 0.254) (type default)))
+        (pin passive line (at 0 0 180) (length 2.54) (name P) (number 1) (offset 0 1.27))
+      )
+    )
+  )
+  (symbol (lib_id "Test:Stacked") (at 50 50)
+    (property "Reference" "B1" (at 48 48))
+  )
+)
+"""
+
+
+class TestSymbolBodyGeometry:
+    def test_a_declared_stroke_widens_the_body_box(self, tmp_path):
+        # KiCad strokes the path down its centre line, so the ink reaches half a
+        # width past it on every side.
+        component = _extract(tmp_path, STROKED_BODY).component("B1")
+        assert component.body_bbox == BBox(48.873, 48.873, 51.127, 51.127)
+
+    def test_a_zero_stroke_falls_back_to_the_sheet_default(self, tmp_path):
+        component = _extract(tmp_path, DEFAULT_WIDTH_BODY).component("B1")
+        half = DEFAULT_LINE_WIDTH / 2.0
+        assert component.body_bbox == BBox(50 - 1 - half, 50 - 1 - half, 51 + half, 51 + half)
+
+    def test_a_sub_symbol_offset_moves_its_whole_body(self, tmp_path):
+        plain = _extract(tmp_path, STROKED_BODY, "plain.kicad_sch").component("B1")
+        offset = _extract(tmp_path, OFFSET_BODY, "offset.kicad_sch").component("B1")
+
+        # The sub-symbol offset is in library coordinates, where y grows upwards,
+        # so (offset 2.54 -1.27) lands 2.54 right and 1.27 below. The pin's own
+        # offset of (0 1.27) pushes it back up by the same amount.
+        assert offset.body_bbox.min_x == pytest.approx(plain.body_bbox.min_x + 2.54)
+        assert offset.body_bbox.min_y == pytest.approx(plain.body_bbox.min_y + 1.27)
+        # The pin sits at local (0, 0) with its own (0 1.27) offset, so the two
+        # offsets cancel on the sheet and only the 2.54 of x survives.
+        assert offset.pin_connections[0].at == pytest.approx((52.54, 50.0))
+
+    def test_a_pin_offset_shifts_only_that_pin(self, tmp_path):
+        plain = _extract(tmp_path, STROKED_BODY, "plain.kicad_sch").component("B1")
+        offset = _extract(tmp_path, OFFSET_BODY, "offset.kicad_sch").component("B1")
+
+        assert offset.pin_connections[0].at != plain.pin_connections[0].at
+        assert offset.pin_connections[0].number == "1"
+
+
+class TestPinGeometry:
+    def test_a_pin_box_carries_the_drawn_line_width(self, scene):
+        u1 = scene.component("U1")
+        for box in u1.pin_bboxes:
+            assert box.height > 0, "a degenerate pin box can never collide"
+
+    def test_a_pin_can_be_hit_just_off_its_centreline(self, scene):
+        u1 = scene.component("U1")
+        pin = u1.pin_bboxes[0]
+        middle = (pin.min_y + pin.max_y) / 2.0
+        sliver = BBox(pin.min_x, middle - 0.02, pin.min_x + 0.01, middle - 0.019)
+
+        assert sliver.intersects(pin)
+
+    def test_connection_points_sit_at_the_far_end_of_their_pin(self, tmp_path):
+        component = _extract(tmp_path, STROKED_BODY).component("B1")
+        connection = component.pin_connections[0]
+
+        assert connection.at == pytest.approx((46.19, 50.0))
+        assert connection.label == "B1.1"
+        # The connection point is the outer end of the drawn line, so it is
+        # inside the inflated box rather than on its edge.
+        assert component.pin_bboxes[0].contains_point(*connection.at)
+
+    def test_the_scene_reports_one_connection_per_pin(self, scene):
+        for component in scene.components:
+            assert len(component.pin_connections) == len(component.pin_bboxes)
 
 
 class TestWholeSheet:
@@ -108,17 +222,11 @@ class TestComponents:
 
 
 class TestTextGeometry:
-    def test_cap_height_text_is_exactly_the_font_size_tall(self, scene):
+    def test_text_reserves_one_line_height(self, scene):
         u1 = scene.component("U1")
         reference = next(t for t in u1.texts if t.field == "Reference")
         assert reference.rotation == 0.0
-        assert reference.bbox.height == pytest.approx(reference.size)
-
-    def test_text_with_a_descender_is_taller_than_the_font_size(self, scene):
-        u1 = scene.component("U1")
-        value = next(t for t in u1.texts if t.field == "Value")
-        assert "g" in value.content
-        assert value.bbox.height > value.size
+        assert reference.bbox.height == pytest.approx(line_height(reference.size))
 
     def test_rotated_fields_render_flat(self, scene):
         # SW1's reference is stored at 90 degrees on a symbol placed at 270, but
@@ -126,13 +234,14 @@ class TestTextGeometry:
         sw1 = scene.component("SW1")
         reference = next(t for t in sw1.texts if t.field == "Reference")
         assert reference.rotation == 0.0
-        flat = text_bbox(reference.content, reference.size, Placement(0.0, 0.0))
+        flat = text_cell_bbox(reference.content, reference.size, (0.0, 0.0))
         assert reference.bbox.width == pytest.approx(flat.width)
         assert reference.bbox.height == pytest.approx(flat.height)
 
-    def test_ink_is_never_wider_than_the_advance_width(self, scene):
+    def test_reserved_width_is_the_advances_plus_a_stroke(self, scene):
         for item in scene.component_texts:
-            assert item.bbox.width <= advance_width(item.content, item.size) + 1e-9
+            extra = item.bbox.width - advance_width(item.content, item.size)
+            assert extra == pytest.approx(0.2, abs=0.01), item.content
 
 
 class TestWiresAndJunctions:
@@ -172,12 +281,14 @@ class TestPlacementTransforms:
         _start, end = pin.segment()
         assert end == pytest.approx((2.54, 0.0))
 
+        # A symbol turned 90 degrees counter-clockwise on screen sends a pin
+        # that pointed right in the library to one that points up.
         turned = Placement(0.0, 0.0, rotation=90.0)
-        assert turned.apply(*end) == pytest.approx((0.0, 2.54), abs=1e-9)
+        assert turned.apply(*end) == pytest.approx((0.0, -2.54), abs=1e-9)
 
     def test_mirror_reflects_local_geometry_about_the_anchor(self):
         mirrored = Placement(10.0, 20.0, mirror="y")
-        assert mirrored.apply(3.0, 4.0) == pytest.approx((7.0, 24.0))
+        assert mirrored.apply(3.0, 4.0) == pytest.approx((7.0, 16.0))
 
     def test_apply_box_is_conservative_off_axis(self):
         box = Placement(0.0, 0.0, rotation=45.0).apply_box(_box(0.0, 0.0, 10.0, 0.0))
