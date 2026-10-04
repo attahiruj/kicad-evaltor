@@ -75,14 +75,15 @@ python examples/simple_circuit_test.py
 [`examples/visual_test.py`](examples/visual_test.py) does the same for the
 layout checks, against
 [`examples/demo_circuit/visual_test.kicad_sch`](examples/demo_circuit/visual_test.kicad_sch).
-That sheet documents its own defects in seven annotation texts, and the script
-reports which of them the checks catch, which need a `margin` to appear, and why
-the rest are not reported. Two of the seven turn out not to be true of the sheet,
-and the script says so rather than passing over them. It needs no KiCad at all:
+It runs every `sch.layout.*` and `sch.noconnect.*` check the registry knows and
+lists each finding with the properties and coordinates involved. It is a report,
+not a test: it exits 0 even when the checks find defects. It needs no KiCad at
+all, and takes any sheet as an argument:
 
 ```bash
-python examples/visual_test.py            # human report
-python examples/visual_test.py --json     # the same failures as JSON
+python examples/visual_test.py                                 # human report
+python examples/visual_test.py --json                          # the same failures as JSON
+python examples/visual_test.py path/to/your.kicad_sch          # any other sheet
 ```
 
 ## Checks
@@ -112,9 +113,12 @@ verdicts match what you see in the viewer.
 | `sch.layout.symbol_symbol_overlap` | `SymbolSymbolOverlapCheck` | Two symbol bodies share space |
 | `sch.layout.text_off_sheet` | `TextOffSheetCheck` | Text falls outside the sheet boundary |
 | `sch.layout.text_wire_overlap` | `TextWireOverlapCheck` | Text sits on a wire. Opt-in: KiCad masks wires behind text, so this is usually benign |
+| `sch.layout.symbol_wire_overlap` | `SymbolWireOverlapCheck` | A wire runs across a symbol's artwork, or into a pin from the body side |
+| `sch.noconnect.floating` | `NoConnectFloatingCheck` | A no-connect flag marks no pin, or a drawn pin is reached by nothing at all |
 
-Hidden items are never reported. A field marked `(hide yes)` is skipped, and a
-power symbol's name is treated as symbol artwork rather than as text.
+Hidden items are never reported. A field marked `(hide yes)` is skipped, a pin
+marked `(hide yes)` is not counted as a pin left open, and a power symbol's name
+is treated as symbol artwork rather than as text.
 
 A component's own text is measured against its own body rather than the full
 body-and-pins box, and only crossing the outline counts. KiCad places a
@@ -127,6 +131,13 @@ straddling the outline, half in and half out, is reported — and so is text ove
 Every finding carries the properties behind each label, so a report says what is
 on the sheet rather than only which field collided. Value is one property among
 many: user-defined ones such as an LCSC part number are reported the same way.
+
+The two text-on-anything checks answer a legibility question and leave a 0.2mm
+clearance between the pair: text that comes within it is unreadable even though
+nothing is drawn on top of anything. Set `clearance=0` to report only what
+genuinely overlaps. The remaining checks answer "is this drawn on that", so they
+take no clearance, and take a `margin` if the measurement noise of sampled
+outlines and bare pin lines needs hiding.
 
 ```json
 {

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `sch.layout.symbol_wire_overlap` (`SymbolWireOverlapCheck`), reporting a wire
+  that runs across a symbol's artwork or into one of its pins from the body side.
+  A wire leaving a pin away from the body is what a pin is for, and a wire that
+  ends on a square pin side is a normal connection, so neither is reported.
+- `sch.noconnect.floating` (`NoConnectFloatingCheck`), reporting a no-connect
+  flag that marks no pin and a drawn pin that nothing reaches and no flag covers.
+  Pins are named by number, since a symbol can have eight pins all called `NC`.
+  `ignore` takes pins the design leaves open on purpose. A pin the symbol marks
+  `(hide yes)` is not reported: it is not drawn, so no wire, label or flag can
+  reach it on the sheet, and that is how symbols carry their reserved and NC pins.
+- Symbol geometry is measured the way KiCad draws it: placement honours
+  mirroring, negated rotation and `apply_direction`, box corners rotate with the
+  symbol, and pin lengths, offsets and sub-symbol offsets are applied. Pin names
+  and numbers are read from their own atoms rather than from an electrical type.
+- `examples/visual_test.py`, a layout demo against
+  `examples/demo_circuit/visual_test.kicad_sch`. `--json` prints the failures as
+  JSON, and an optional argument points it at any other sheet. It reports rather
+  than asserts: every finding is listed with its geometry, and it exits 0 even when
+  the checks find defects.
+- Layout findings report each item's visible properties, so a collision says what
+  is on the sheet and not only which label it was.
+- `CheckResult.to_dict()` and `TestReport.failures_json()`. `to_json()` takes an
+  `indent`.
+
 ### Changed
 
 - Renamed `circuit.kicad_sch` to `simple_circuit_test.kicad_sch` and
@@ -19,16 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   space, so text fitting wholly inside a body is left alone. Text over another
   symbol's pins is still reported. `J1`'s value was moved clear of its connector
   in the demo sheet, which is the one straddle it actually had.
-
-### Added
-
-- `examples/visual_test.py`, a layout demo against
-  `examples/demo_circuit/visual_test.kicad_sch`. `--json` prints the failures as
-  JSON.
-- Layout findings report each item's visible properties, so a collision says what
-  is on the sheet and not only which label it was.
-- `CheckResult.to_dict()` and `TestReport.failures_json()`. `to_json()` takes an
-  `indent`.
+- Text boxes are now the line cell KiCad reserves for a run of text, sized from a
+  stroke font measured against a real KiCad renderer rather than fitted to the ink.
+  Overlap is measured between boxes by nearest-corner distance instead of
+  `min(gap_x, gap_y)`, which used to call two boxes on a diagonal clear.
+- `clearance` (default 0.2mm) is applied to the two text-on-anything checks, which
+  answer a legibility question; the remaining checks still take `margin` alone.
 
 ### Fixed
 
