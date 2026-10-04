@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Hidden text and labels are no longer treated as drawn geometry. KiCad records
+  `(hide yes)` inside the `(effects ...)` block for `text`, the three label kinds
+  and a sheet pin, rather than beside the node as it does for a symbol field, and
+  only the second placement was read. A hidden note was therefore entered into the
+  scene and could be reported as overlapping other text, sitting on a symbol body,
+  or falling off the sheet. A hidden label over a pin could also mark that pin
+  connected, suppressing a real no-connect finding.
+- `sch.erc` reads a KiCad 10 report again. ERC moved its violations under
+  `sheets[*].violations` and no longer writes a top-level `violations` key, so
+  the parser found nothing and every schematic passed regardless of what KiCad
+  reported. Each violation now names the sheet it was found on. `pcb.drc` is
+  unaffected: DRC still writes one flat top-level list.
+- ERC and DRC findings read KiCad's real field names. Both reports spell the
+  human text `description` and keep positions in `items[*].pos`; reading `message`
+  and `at` reported `None` for every violation in the detail payload.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added

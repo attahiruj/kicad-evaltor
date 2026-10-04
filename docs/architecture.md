@@ -84,10 +84,16 @@ with y increasing downward, matching the file.
 
 Turns a `FileSchematic` into a `SchematicScene` of components, text items,
 wires, junctions and labels, each with a real bounding box. This is where
-rendering judgements are applied, and where hidden items are dropped: a field
+rendering judgements are applied, and where hidden items are dropped: anything
 marked `(hide yes)` is skipped, and a power symbol's `Value` is skipped because
 KiCad draws that name in the symbol's artwork rather than as a field.
 
+Hidden is not one spelling. KiCad puts the flag beside a symbol field and a
+symbol pin, but inside the `(effects ...)` block for everything built on a
+TEXT_EFFECTS block — `text`, the three label kinds, a sheet pin. `sexpr.is_hidden`
+looks in both places so no caller has to know which kind of node it holds, and it
+reads the flag's value rather than its presence, so an explicit `(hide no)` is
+not mistaken for hidden.
 ### `collisions.py`
 
 Pairwise overlap over axis-aligned boxes. Clearance is the minimum axis gap;
@@ -111,6 +117,19 @@ for netlist, ERC and DRC. `TestRunner` takes a list of checks and produces a
 `kicad-cli` is located on `PATH` first, then in the standard install locations,
 since KiCad does not add itself to `PATH` on Windows.
 
+Its JSON reports are not the same shape, and the difference matters. ERC is per
+sheet: the top level carries only metadata, the violations live in
+`sheets[*].violations`, and there is no top-level `violations` key at all. DRC
+stays as one flat top-level list. A parser that reads only the top level finds
+nothing in an ERC report and reports a schematic with errors on it as clean, so
+`utils/kicad_cli.py` reads the sheet-nested shape and falls back to the flat one
+that KiCad 8 and 9 wrote. Both reports spell a violation's text `description` and
+keep positions in `items[*].pos`; there is no `message` and no `at`.
+`violation_details` projects those into one stable spelling for both checks.
+
+The report shape is read off a real `kicad-cli` invocation in `test_integration.py`,
+against a fixture that genuinely has errors on it, rather than from the docs — the
+demo design is clean and so cannot show a parser finding anything.
 ## Boundaries worth respecting
 
 - **`kicad-cli` is only for netlist, ERC and DRC.** KiCad 10 removed
