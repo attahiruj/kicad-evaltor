@@ -7,8 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-04
+
+### Added
+
+- Hierarchical schematics. A design is read as the tree of sheets KiCad draws:
+  every `(sheet ...)` link is followed, relative `Sheetfile` paths resolve the
+  way KiCad resolves them, and a broken link or a cycle becomes a finding rather
+  than an error. Every check runs across the whole tree, so a reference is found
+  on whichever sheet it is drawn, and connectivity follows nets through sheet
+  pins.
+- The layout and no-connect checks take a `sheet` parameter: a sheet name, a
+  `Sheetfile` stem, a uuid instance path, or `"all"`, which is the default. A
+  finding from a child sheet is prefixed with its name, such as
+  `shared.D1.Reference`, and an unknown sheet is a skip that lists the valid
+  names.
+- Four checks on the tree itself: `sch.sheet.file_missing`, `sch.sheet.cycle`,
+  `sch.sheet.pin_mismatch` and `sch.sheet.name_or_page_collision`.
+- `examples/hierarchy.py`, running a suite against the hierarchical demo in
+  `examples/demo_circuit/hierarchy/`.
+- `tools/calibrate_text_placement.py`, which measures where kicad-cli draws
+  each kind of text and writes `_text_placement_data.json`. It checks the fit
+  against probe sets it did not fit on and refuses to write a table that misses
+  by more than 0.02 mm.
+
 ### Changed
 
+- Text boxes are the ink KiCad draws, stroke included, rather than the taller
+  line cell it justifies by. Text that only came near other items was reported
+  as overlapping them. A layout report can therefore differ from 0.2.0: findings
+  that were artifacts of the larger boxes are gone.
+- A symbol is measured by each graphic and pin line it is drawn from, not by
+  the box around the whole symbol, so text in its empty space, beside an LED's
+  triangle or between a connector's pins, is no longer reported as touching it.
+  A global or hierarchical label's flag is likewise measured apart from its text.
+- `sch.footprint.assigned` skips power symbols, which never have a footprint.
+- `sch.noconnect.floating` counts a label as connected by its anchor, which is
+  where KiCad connects it, rather than by any text covering the pin.
 - The demo files drop their `_test` suffix, so every demo script carries the
   name of the sheet it runs: `examples/simple_circuit.py` runs
   `demo_circuit/simple_circuit.kicad_sch`, `examples/visual.py` runs
@@ -18,6 +53,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Text rotation is applied. A label or sheet text follows its angle, and a
+  symbol field follows its own angle and the symbol's rotation and mirror, drawn
+  upright. Every field was boxed as horizontal, so side-by-side vertical fields
+  were reported as overlapping.
+- A symbol's `(mirror x)` or `(mirror y)` is applied after its rotation, as
+  KiCad does. At 90 and 270 degrees the body and pins were mirrored the wrong way.
+- Right-justified text ends at its anchor, and every word of a justification
+  such as `(justify left bottom)` is read, not only the first.
+- A library sub-symbol with body style 0 applies to every body style. Its pins
+  were dropped, so symbols drawn that way, such as the TP4056, had none.
+- KiCad's `{slash}`-style escapes are measured as the characters they draw,
+  overbar, subscript and superscript markup is measured, and multi-line text is
+  laid out line by line. Font thickness and bold are read.
+- A no-connect flag on a sheet block's pin marks that pin, and a pin ending on
+  another pin is connected without a wire, as KiCad's ERC treats both.
 - Hidden text and labels are no longer treated as drawn geometry. KiCad records
   `(hide yes)` inside the `(effects ...)` block for `text`, the three label kinds
   and a sheet pin, rather than beside the node as it does for a symbol field, and
@@ -135,6 +185,7 @@ First public release.
 - KiCad dependencies are not pinned per check version, so ERC and DRC output
   shape can shift between KiCad releases.
 
-[Unreleased]: https://github.com/attahiruj/kicad-evaltor/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/attahiruj/kicad-evaltor/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/attahiruj/kicad-evaltor/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/attahiruj/kicad-evaltor/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/attahiruj/kicad-evaltor/tree/v0.1.0
