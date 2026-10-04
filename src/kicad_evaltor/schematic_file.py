@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from kicad_evaltor.geometry import Placement
-from kicad_evaltor.sexpr import SExpr, child, children, head, parse, value_of
+from kicad_evaltor.sexpr import SExpr, child, children, head, is_hidden, parse, value_of
 
 # KiCad's standard symbol properties, exposed as `fields` the way kipy does.
 _STANDARD_PROPERTIES = frozenset(
@@ -342,7 +342,7 @@ def _field_from(prop: list[SExpr], name: str, text: str) -> FileField:
         rotation=position[2] if len(position) > 2 else 0.0,
         size=float(size) if size else 1.27,
         justify=justify or None,
-        hidden=child(prop, "hide") is not None,
+        hidden=is_hidden(prop),
     )
 
 

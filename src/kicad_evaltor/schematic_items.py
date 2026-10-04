@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from kicad_evaltor.font_metrics import text_cell_bbox
 from kicad_evaltor.geometry import BBox, Placement
 from kicad_evaltor.schematic_file import FileField, FileSchematic
-from kicad_evaltor.sexpr import SExpr, child, children, head, value_of
+from kicad_evaltor.sexpr import SExpr, child, children, head, is_hidden, value_of
 
 Point = tuple[float, float]
 
@@ -310,7 +310,7 @@ def _symbol_pins(sub: SExpr) -> tuple[SymbolPin, ...]:
                 angle=angle,
                 length=lengths[0] if lengths else 2.54,
                 offset=_point(child(pin, "offset")),
-                hidden=child(pin, "hide") is not None,
+                hidden=is_hidden(pin),
             )
         )
     return tuple(pins)
@@ -571,6 +571,11 @@ def extract(schematic: FileSchematic) -> SchematicScene:
 
     for kind in ("text", "label", "global_label", "hierarchical_label"):
         for node in children(schematic.nodes(), kind):
+            # Hidden text puts no ink on the sheet, so it cannot overlap anything
+            # and no reader can be confused by it. These nodes keep `(hide yes)`
+            # inside the effects block rather than beside it.
+            if is_hidden(node):
+                continue
             effects = child(node, "effects")
             font = child(effects, "font") if effects else None
             size_values = _numbers(child(font, "size")) if font else []

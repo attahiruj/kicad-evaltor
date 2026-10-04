@@ -122,3 +122,25 @@ def value_of(node: list[SExpr] | None, index: int = 1, default: str = "") -> str
         return default
     candidate = node[index]
     return candidate if isinstance(candidate, str) else default
+
+
+def is_hidden(node: SExpr | None) -> bool:
+    """Whether a node is flagged hidden, so KiCad draws nothing for it.
+
+    KiCad keeps the flag in one of two places depending on what the node is. A
+    symbol field and a symbol pin carry ``(hide yes)`` as a direct child, because
+    they are written by the schematic field and pin writers. Everything built on
+    a TEXT_EFFECTS block -- ``text``, the three label kinds, and a sheet pin --
+    keeps it inside that block instead, as the optional last item of
+    ``(effects (font ...) (justify ...) (hide yes))``. Both placements are checked
+    so a caller need not know which one its node uses.
+
+    The value decides, not the mere presence of the token: the grammar allows a
+    bare ``(hide)``, which means hidden, and a third-party generator may spell it
+    ``(hide no)``, which does not.
+    """
+    for parent in (node, child(node, "effects")):
+        flag = child(parent, "hide")
+        if flag is not None and value_of(flag, default="yes") != "no":
+            return True
+    return False
