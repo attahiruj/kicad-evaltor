@@ -2,35 +2,51 @@
 
 These answer "is anything drawn on top of anything else", which is a different
 question from ERC: ERC cares whether the circuit is valid, these care whether a
-human can read it. All five share one collision engine and one scene extraction,
+human can read it. All six share one collision engine and one scene extraction,
 so the geometry is computed the same way everywhere.
 
-Two deliberate modelling choices:
+Three deliberate modelling choices:
 
-* Symbol-vs-symbol compares *body* boxes only. Pins are meant to reach toward
-  each other, so pin overlap is normal and reporting it would bury the real
-  defects.
+* Anything-vs-symbol compares *body* boxes only. Pins are meant to reach toward
+  wires and toward each other, so pin overlap is normal and reporting it would
+  bury the real defects.
 * Text-vs-symbol uses the full body-and-pins box, except against the symbol the
   text belongs to. See ``TextSymbolOverlapCheck``.
+* The two checks that answer a legibility question -- text against text, and text
+  against a symbol -- also reject anything inside ``clearance`` of touching. The
+  others report strict overlap. See ``OverlapParams``.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from typing import ClassVar
 
 from kicad_evaltor.checks.base import Check, CheckCategory, CheckParams, CheckResult
 from kicad_evaltor.checks.registry import register
-from kicad_evaltor.collisions import CollisionItem, colliding_pairs, cross_kind
+from kicad_evaltor.collisions import Collision, CollisionItem, colliding_pairs, cross_kind
 from kicad_evaltor.core.context import DesignContext
-from kicad_evaltor.geometry import BBox
+from kicad_evaltor.geometry import BBox, Point
 from kicad_evaltor.schematic_file import FileSchematic
-from kicad_evaltor.schematic_items import SchematicScene, extract
+from kicad_evaltor.schematic_items import (
+    Component,
+    PinConnection,
+    SchematicScene,
+    WireSegment,
+    extract,
+)
 
 
 @dataclass
 class OverlapParams(CheckParams):
     """Shared tuning for the overlap checks.
+
+    ``clearance`` is the gap a pair must leave between it, measured between the
+    two boxes rather than by growing each one, so 0.2 means a 0.2mm gap and not
+    0.1mm. Text that comes within it is unreadable even though nothing is drawn
+    on top of anything. The checks that answer a legibility question use it; the
+    ones that answer "is this drawn on that" do not.
 
     ``margin`` is applied by growing every box before testing, so a positive
     margin reports items that are too close and a negative one ignores
@@ -44,14 +60,16 @@ class OverlapParams(CheckParams):
     """
 
     margin: float = 0.0
+    clearance: float = 0.2
     ignore: list[str] = field(default_factory=list)
 
     def validate(self) -> None:
         # A margin larger than the geometry it applies to collapses boxes, which
         # the engine handles, so the only thing worth catching is a value that
         # is not a number at all.
-        if isinstance(self.margin, bool) or not isinstance(self.margin, int | float):
-            raise TypeError(f"margin must be a number, got {self.margin!r}")
+        for name, value in (("margin", self.margin), ("clearance", self.clearance)):
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise TypeError(f"{name} must be a number, got {value!r}")
 
 
 def _scene(ctx: DesignContext) -> tuple[SchematicScene | None, CheckResult | None]:
@@ -94,19 +112,23 @@ def _drop_ignored(items: list[CollisionItem], ignore: list[str]) -> list[Collisi
     return [item for item in items if item.label not in ignored]
 
 
-def _text_first(collisions) -> list:
-    """Order each collision so the text item comes first.
+def _kind_first(collisions, kind: str) -> list:
+    """Order each collision so the given kind comes first.
 
     The engine emits pairs in sweep order, which depends on coordinates. Pinning
-    the text to ``first`` keeps the reported pairs stable and readable.
+    one kind to ``first`` keeps the reported pairs stable and readable.
     """
     ordered = []
     for collision in collisions:
-        if collision.first.kind == "text":
+        if collision.first.kind == kind:
             ordered.append(collision)
         else:
             ordered.append(replace(collision, first=collision.second, second=collision.first))
     return ordered
+
+
+def _text_first(collisions) -> list:
+    return _kind_first(collisions, "text")
 
 
 def _report(check_id: str, summaries: list[str], details: list[dict], checked: int) -> CheckResult:
@@ -132,6 +154,10 @@ class _OverlapCheck(Check[OverlapParams]):
     def items(self, scene: SchematicScene) -> list[CollisionItem]:
         raise NotImplementedError
 
+    def required_clearance(self) -> float:
+        """The gap a pair must leave to count, or 0 for overlap alone."""
+        return 0.0
+
     def filter(self, collisions):
         """Narrow the raw engine output down to this check's question."""
         return collisions
@@ -144,7 +170,9 @@ class _OverlapCheck(Check[OverlapParams]):
             return CheckResult.skip(self.id, "No schematic available")
 
         items = _drop_ignored(self.items(scene), self.params.ignore)
-        collisions = self.filter(colliding_pairs(items, margin=self.params.margin))
+        collisions = self.filter(
+            colliding_pairs(items, margin=self.params.margin, clearance=self.required_clearance())
+        )
         return self._result(items, collisions)
 
     def _result(self, items: list[CollisionItem], collisions: list) -> CheckResult:
@@ -160,10 +188,20 @@ class _OverlapCheck(Check[OverlapParams]):
 
 @register
 class TextTextOverlapCheck(_OverlapCheck):
+    """Reports text drawn on top of other text, or too near it to read.
+
+    Two values in a row have no outline to hide behind, so the clearance is what
+    makes this check useful: a 0.2mm gap between two cells is enough to read
+    both, and anything tighter is not.
+    """
+
     id = "sch.layout.text_text_overlap"
     name = "Text Over Text Overlap"
     description = "Reports text drawn on top of other text"
     category = CheckCategory.SCHEMATIC
+
+    def required_clearance(self) -> float:
+        return self.params.clearance
 
     def items(self, scene: SchematicScene) -> list[CollisionItem]:
         return _text_items(scene)
@@ -192,6 +230,9 @@ class TextSymbolOverlapCheck(_OverlapCheck):
     description = "Reports text drawn on top of a symbol"
     category = CheckCategory.SCHEMATIC
 
+    def required_clearance(self) -> float:
+        return self.params.clearance
+
     def run(self, ctx: DesignContext) -> CheckResult:
         scene, blocker = _scene(ctx)
         if blocker is not None:
@@ -200,12 +241,13 @@ class TextSymbolOverlapCheck(_OverlapCheck):
             return CheckResult.skip(self.id, "No schematic available")
 
         ignore = self.params.ignore
+        clearance = self.required_clearance()
         texts = _drop_ignored(_text_items(scene), ignore)
         bodies = _drop_ignored(_symbol_items(scene, include_pins=False), ignore)
         pinned = _drop_ignored(_symbol_items(scene, include_pins=True), ignore)
 
         def against(symbols: list[CollisionItem]) -> list:
-            pairs = colliding_pairs(texts + symbols, margin=self.params.margin)
+            pairs = colliding_pairs(texts + symbols, margin=self.params.margin, clearance=clearance)
             return _text_first(cross_kind(pairs, "text", "symbol"))
 
         def own(collision) -> bool:
@@ -244,6 +286,111 @@ class TextWireOverlapCheck(_OverlapCheck):
 
     def filter(self, collisions):
         return _text_first(cross_kind(collisions, "text", "wire"))
+
+
+@register
+class SymbolWireOverlapCheck(Check[OverlapParams]):
+    """Reports a wire drawn under a symbol's own artwork.
+
+    A wire that ends at a pin is a connection, not a defect, so this does not
+    report the power symbol on every ground wire on the sheet. What it reports is
+    a wire that leaves its own pin heading back *into* the body, or crosses a
+    body with no pin under it at all. Either way the wire is drawn underneath the
+    symbol and disappears into it, so nothing on the sheet shows where the net
+    goes.
+
+    ``PWR_FLAG`` is the case worth having. Its artwork is a flag on a pole, and
+    laying it straight onto the wire it feeds hides that wire and leaves the flag
+    looking shorted to nothing.
+    """
+
+    id = "sch.layout.symbol_wire_overlap"
+    name = "Symbol Body Over Wire"
+    description = "Reports a wire drawn under the symbol it starts from"
+    category = CheckCategory.SCHEMATIC
+    Params: ClassVar[type[OverlapParams]] = OverlapParams
+
+    def run(self, ctx: DesignContext) -> CheckResult:
+        scene, blocker = _scene(ctx)
+        if blocker is not None:
+            return blocker
+        if scene is None:
+            return CheckResult.skip(self.id, "No schematic available")
+
+        ignore = set(self.params.ignore)
+        wires = [w for w in scene.wires if w.label not in ignore]
+        bodies = [
+            (component, component.body_bbox)
+            for component in scene.components
+            if component.body_bbox is not None and component.reference not in ignore
+        ]
+
+        collisions = [
+            collision
+            for wire in wires
+            for component, body in bodies
+            if (collision := _buried_wire(wire, component, body)) is not None
+        ]
+        return _report(
+            self.id,
+            [c.describe() for c in collisions],
+            [c.as_dict() for c in collisions],
+            len(wires) + len(bodies),
+        )
+
+
+def _buried_wire(wire: WireSegment, component: Component, body: BBox) -> Collision | None:
+    """The finding for one wire over one body, or None when the wire connects."""
+    shared = body.intersection(wire.bbox)
+    if shared is None:
+        return None
+    pin = _pin_under(wire, component)
+    if pin is not None and not _runs_backwards(wire, pin):
+        return None
+    symbol = CollisionItem(
+        "symbol", component.reference, body, component.reference, component.properties
+    )
+    return Collision(symbol, CollisionItem("wire", wire.label, wire.bbox), shared)
+
+
+def _pin_under(wire: WireSegment, component: Component) -> PinConnection | None:
+    """The pin this wire lands on, if it lands on one.
+
+    The tolerance is half the wire's own width, which is as far as its drawn
+    line reaches from its path. A wire stopping short of a pin has not connected
+    to it, and one crossing a body with no pin underneath is reported for that
+    reason rather than for burying anything.
+    """
+    nearest: PinConnection | None = None
+    nearest_distance = wire.width / 2.0
+    for pin in component.pin_connections:
+        distance = _point_to_segment(pin.at, wire.start, wire.end)
+        if distance <= nearest_distance:
+            nearest, nearest_distance = pin, distance
+    return nearest
+
+
+def _runs_backwards(wire: WireSegment, pin: PinConnection) -> bool:
+    """True when the wire leaves this pin heading across the symbol's own body."""
+    dx = wire.bbox.center[0] - pin.at[0]
+    dy = wire.bbox.center[1] - pin.at[1]
+    length = math.hypot(dx, dy)
+    if length == 0.0:
+        return False
+    heading = (dx / length) * pin.into_body[0] + (dy / length) * pin.into_body[1]
+    # A wire arriving square to the pin is a connection, and cos(270°) is
+    # -1.8e-16 rather than 0, so square has to be told apart from a hair.
+    return heading > 1e-9
+
+
+def _point_to_segment(point: Point, start: Point, end: Point) -> float:
+    """Shortest distance from a point to a segment, ends included."""
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    span = dx * dx + dy * dy
+    if span == 0.0:
+        return math.dist(point, start)
+    t = max(0.0, min(1.0, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / span))
+    return math.dist(point, (start[0] + t * dx, start[1] + t * dy))
 
 
 @register

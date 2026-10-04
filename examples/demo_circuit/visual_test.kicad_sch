@@ -1680,7 +1680,7 @@
 	)
 	(text "+3.3V text on J2 pin 2 ovelaps line connecting\nJ2 pin 1 to +3.3V"
 		(exclude_from_sim no)
-		(at 75 186 0)
+		(at 101.6 115.062 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1690,7 +1690,7 @@
 	)
 	(text "`RESET` net label overlaps `SW_Push` text\n and SW2 symbol\n\n`SW2` overlaps ground symbol"
 		(exclude_from_sim no)
-		(at 222 186 0)
+		(at 254.254 67.564 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1700,7 +1700,7 @@
 	)
 	(text "J1 symbol label overlaps symbol shape"
 		(exclude_from_sim no)
-		(at 75 191 0)
+		(at 101.854 65.278 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1710,7 +1710,7 @@
 	)
 	(text "4 No connect flag placed on \nU2 component border not on a pin\n\nU2 label overlap component symbol"
 		(exclude_from_sim no)
-		(at 222 191 0)
+		(at 50.038 121.158 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1720,7 +1720,7 @@
 	)
 	(text "SW_Push value overlaps own symbol\n"
 		(exclude_from_sim no)
-		(at 75 196 0)
+		(at 151.892 67.056 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1730,7 +1730,7 @@
 	)
 	(text "PWR_FLAG text and symbol overlaps \nline connecting it to +3.3V\n"
 		(exclude_from_sim no)
-		(at 222 196 0)
+		(at 50.546 66.294 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1740,7 +1740,7 @@
 	)
 	(text "R1 value (10K) intersects own symbol shape\n\nRESET net label intersects R1 Symbol\n"
 		(exclude_from_sim no)
-		(at 75 201 0)
+		(at 203.708 67.31 0)
 		(effects
 			(font
 				(size 1.27 1.27)

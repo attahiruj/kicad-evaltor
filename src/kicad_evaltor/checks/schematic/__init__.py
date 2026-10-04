@@ -5,8 +5,10 @@ from kicad_evaltor.checks.schematic.components_connected import ComponentsConnec
 from kicad_evaltor.checks.schematic.consistency import ConsistencyCheck
 from kicad_evaltor.checks.schematic.erc_check import ERCRunCheck
 from kicad_evaltor.checks.schematic.footprint_assigned import FootprintAssignedCheck
+from kicad_evaltor.checks.schematic.no_connect import NoConnectFloatingCheck
 from kicad_evaltor.checks.schematic.overlaps import (
     SymbolSymbolOverlapCheck,
+    SymbolWireOverlapCheck,
     TextOffSheetCheck,
     TextSymbolOverlapCheck,
     TextTextOverlapCheck,
@@ -22,8 +24,10 @@ __all__ = [
     "ConsistencyCheck",
     "ERCRunCheck",
     "FootprintAssignedCheck",
+    "NoConnectFloatingCheck",
     "SymbolInLibraryCheck",
     "SymbolSymbolOverlapCheck",
+    "SymbolWireOverlapCheck",
     "TextOffSheetCheck",
     "TextSymbolOverlapCheck",
     "TextTextOverlapCheck",

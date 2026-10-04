@@ -11,9 +11,11 @@ TEXT_TEXT = "sch.layout.text_text_overlap"
 TEXT_SYMBOL = "sch.layout.text_symbol_overlap"
 TEXT_WIRE = "sch.layout.text_wire_overlap"
 SYMBOL_SYMBOL = "sch.layout.symbol_symbol_overlap"
+SYMBOL_WIRE = "sch.layout.symbol_wire_overlap"
+NO_CONNECT = "sch.noconnect.floating"
 TEXT_OFF_SHEET = "sch.layout.text_off_sheet"
 
-ALL = [TEXT_TEXT, TEXT_SYMBOL, TEXT_WIRE, SYMBOL_SYMBOL, TEXT_OFF_SHEET]
+ALL = [TEXT_TEXT, TEXT_SYMBOL, TEXT_WIRE, SYMBOL_SYMBOL, SYMBOL_WIRE, NO_CONNECT, TEXT_OFF_SHEET]
 
 
 def count(check_id, **params):
@@ -78,9 +80,11 @@ class TestDemoSheetResults:
         # nobody mistakes the output for a defect list.
         result = run(TEXT_WIRE)
         assert result.status is Status.FAIL
-        assert result.details["count"] == 2
+        # SDA and SCL each reach across three wires: the stub they hang off and
+        # the two runs of the net they name.
+        assert result.details["count"] == 6
         labels = {o["first"] for o in result.details["overlaps"]}
-        assert {"SDA", "SCL"} <= labels
+        assert labels == {"SDA", "SCL"}
         assert all(o["second_kind"] == "wire" for o in result.details["overlaps"])
 
     def test_no_two_symbol_bodies_share_space(self):
@@ -96,8 +100,9 @@ class TestDemoSheetResults:
         assert result.details["checked"] == 34
 
 
-# Two 5.08 x 5.08 bodies with a 1.27mm pin stub top and bottom, so body+pins spans
-# y 96.19..103.81 while the body alone spans 97.46..102.54.
+# Two 5.08 x 5.08 bodies with a 1.27mm pin stub top and bottom. The outline is
+# stroked half a line width outside its path, so body+pins spans y 96.31..103.97
+# while the body alone spans 97.38..102.62.
 PART = """(symbol "Device:R"
       (symbol "R_0_1"
         (rectangle (start -2.54 -2.54) (end 2.54 2.54))
@@ -118,8 +123,9 @@ def field(reference, value, x, y):
 def own_symbol_ctx(tmp_path):
     """One placement per rule branch, around identical 5.08mm bodies.
 
-    R1's reference sits over its own pin stub, R2's wholly inside its own body,
-    R3's across its own body's edge, and a free-standing label over R2's pin.
+    R1's reference sits over its own pin stub and clears its own body by
+    0.24mm, R2's wholly inside its own body, R3's across its own body's edge,
+    and a free-standing label over R2's pin.
     """
     path = tmp_path / "own_symbol.kicad_sch"
     path.write_text(
@@ -128,7 +134,7 @@ def own_symbol_ctx(tmp_path):
     {PART}
   )
   (symbol (lib_id "Device:R") (at 100 100 0)
-    {field("R1", "10k", 100, 103.5)}
+    {field("R1", "10k", 100, 103.6)}
   )
   (symbol (lib_id "Device:R") (at 140 100 0)
     {field("R2", "10k", 140, 100)}
@@ -145,6 +151,198 @@ def own_symbol_ctx(tmp_path):
         encoding="utf-8",
     )
     return DesignContext(schematic_path=path)
+
+
+class TestNoConnectFlags:
+    """A flag that marks nothing, and a pin nothing reaches, are both promises
+    the sheet does not keep.
+
+    The demo sheet is clean by design, so these cases are built rather than
+    observed.
+    """
+
+    SYMBOL = """(symbol "Test:Tagged"
+      (property "Reference" "T?")
+      (symbol "Tagged_0_1"
+        (rectangle (start -2.54 0) (end 2.54 -2.54))
+        (pin passive line (at -2.54 -1.27 0) (length 0) (name P1) (number 1))
+        (pin passive line (at 2.54 -1.27 180) (length 0) (name P2) (number 2))
+      )
+    )"""
+
+    @pytest.fixture
+    def ctx(self, tmp_path):
+        def schematic(extra=""):
+            path = tmp_path / f"flags_{abs(hash(extra))}.kicad_sch"
+            path.write_text(
+                f"""(kicad_sch (version 20250114) (generator "evaltor") (paper "A4")
+  (lib_symbols
+    {self.SYMBOL}
+  )
+  (symbol (lib_id "Test:Tagged") (at 100 100 0)
+    (property "Reference" "T1" (at 100 90))
+  )
+  {extra}
+)
+""",
+                encoding="utf-8",
+            )
+            return DesignContext(schematic_path=path)
+
+        return schematic
+
+    def _run(self, ctx):
+        result = CheckRegistry.create(NO_CONNECT).run(ctx)
+        return result
+
+    def test_the_demo_sheet_flags_every_pin_it_leaves_open(self):
+        result = run(NO_CONNECT)
+        assert result.status is Status.PASS
+        assert result.details["flags"] == 37
+
+    def test_a_flag_on_a_pin_is_a_kept_promise(self, ctx):
+        both = "(no_connect (at 97.46 101.27)) (no_connect (at 102.54 101.27))"
+        result = self._run(ctx(both))
+        assert result.status is Status.PASS
+        assert result.details.get("unmarked_pins", []) == []
+
+    def test_a_flag_off_every_pin_marks_nothing(self, ctx):
+        result = self._run(ctx("(no_connect (at 100 99))"))
+        assert result.status is Status.FAIL
+        assert result.details["floating_flags"] == [[100.0, 99.0]]
+
+    def test_a_wire_reaching_a_pin_counts(self, ctx):
+        wire = "(wire (pts (xy 102.54 101.27) (xy 110 101.27)) (stroke (width 0) (type default)))"
+        result = self._run(ctx(wire))
+        assert result.details["unmarked_pins"] == ["T1.1"]
+
+    def test_a_label_on_a_pin_counts(self, ctx):
+        label = """(label "N1" (at 97.46 101.27 0) (effects (font (size 1.27 1.27))))"""
+        result = self._run(ctx(label))
+        assert result.details["unmarked_pins"] == ["T1.2"]
+
+    def test_the_details_name_both_kinds_of_finding(self, ctx):
+        result = self._run(ctx("(no_connect (at 100 99))"))
+        assert result.message == "1 flag marking nothing, 2 pins reached by nothing"
+        assert result.details["floating_flags"] == [[100.0, 99.0]]
+        assert result.details["unmarked_pins"] == ["T1.1", "T1.2"]
+
+    def test_a_pin_the_symbol_hides_is_not_reported(self, tmp_path):
+        """A hidden pin is not drawn, so nothing on the sheet can be wrong about it."""
+        path = tmp_path / "hidden.kicad_sch"
+        path.write_text(
+            """(kicad_sch (version 20250114) (generator "evaltor") (paper "A4")
+  (lib_symbols
+    (symbol "Test:Hidden"
+      (symbol "Hidden_0_1"
+        (rectangle (start -2.54 0) (end 2.54 -2.54))
+        (pin passive line (at -2.54 -1.27 0) (length 0) (name P1) (number 1))
+        (pin no_connect line (at 2.54 -1.27 180) (length 0) (hide yes) (name NC) (number 2))
+      )
+    )
+  )
+  (symbol (lib_id "Test:Hidden") (at 100 100 0)
+    (property "Reference" "T1" (at 100 90))
+  )
+  (no_connect (at 97.46 101.27))
+)
+""",
+            encoding="utf-8",
+        )
+        result = self._run(DesignContext(schematic_path=path))
+        assert result.status is Status.PASS
+        assert result.details["pins"] == 1
+
+    def test_ignore_accepts_a_pin_left_open_on_purpose(self, ctx):
+        result = CheckRegistry.create(NO_CONNECT, ignore=["T1.1", "T1.2"]).run(ctx())
+        assert result.status is Status.PASS
+
+
+class TestWiresUnderSymbols:
+    """A wire ends at a pin; it does not run back under the symbol.
+
+    A body that hangs below its pin at (100, 100) spans y 100..102.62. Four
+    wires cross that body, and only the two that are actually wrong may be
+    reported, or every power symbol on a real sheet would be.
+    """
+
+    SYMBOL = """(symbol "Test:Post"
+      (property "Reference" "P?")
+      (symbol "Post_0_1"
+        (rectangle (start -2.54 0) (end 2.54 -2.54))
+        (pin passive line (at 0 0 270) (length 0) (name P) (number 1))
+      )
+    )"""
+
+    WIRES = {
+        "into": ((100, 100), (100, 105)),
+        "away": ((100, 100), (100, 95)),
+        "square": ((100, 100), (105, 100)),
+        "crossing": ((100, 101.5), (105, 101.5)),
+    }
+
+    @pytest.fixture
+    def ctx(self, tmp_path):
+        wires = "".join(
+            f"""(wire (pts (xy {x0} {y0}) (xy {x1} {y1}))
+        (stroke (width 0) (type default)))"""
+            for (x0, y0), (x1, y1) in self.WIRES.values()
+        )
+        path = tmp_path / "buried_wire.kicad_sch"
+        path.write_text(
+            f"""(kicad_sch (version 20250114) (generator "evaltor") (paper "A4")
+  (lib_symbols
+    {self.SYMBOL}
+  )
+  (symbol (lib_id "Test:Post") (at 100 100 0)
+    (property "Reference" "P1" (at 100 90))
+  )
+  {wires}
+)
+""",
+            encoding="utf-8",
+        )
+        return DesignContext(schematic_path=path)
+
+    @pytest.fixture
+    def label(self):
+        def label(name):
+            # WireSegment renders its endpoints as floats, so the expected label
+            # is built the same way rather than from the integers in the file.
+            (x0, y0), (x1, y1) = ((float(a), float(b)) for a, b in self.WIRES[name])
+            return f"wire {(x0, y0)}->{(x1, y1)}"
+
+        return label
+
+    def _reported(self, ctx):
+        result = CheckRegistry.create(SYMBOL_WIRE).run(ctx)
+        assert result.status is Status.FAIL
+        return {o["second"] for o in result.details["overlaps"]}
+
+    def test_a_wire_running_into_the_body_is_reported(self, ctx, label):
+        assert label("into") in self._reported(ctx)
+
+    def test_a_wire_leaving_away_from_the_body_is_not(self, ctx, label):
+        assert label("away") not in self._reported(ctx)
+
+    def test_a_wire_arriving_square_to_the_pin_is_not(self, ctx, label):
+        assert label("square") not in self._reported(ctx)
+
+    def test_a_wire_crossing_a_body_with_no_pin_under_it_is_reported(self, ctx, label):
+        assert label("crossing") in self._reported(ctx)
+
+    def test_the_demo_sheet_has_no_buried_wires(self):
+        result = run(SYMBOL_WIRE)
+        assert result.status is Status.PASS
+        assert result.details.get("count", 0) == 0
+
+    def test_a_finding_names_the_symbol_and_the_wire(self, ctx):
+        result = CheckRegistry.create(SYMBOL_WIRE).run(ctx)
+        finding = result.details["overlaps"][0]
+        assert finding["first_kind"] == "symbol"
+        assert finding["first"] == "P1"
+        assert finding["second_kind"] == "wire"
+        assert finding["second_properties"] == {}
 
 
 class TestOwnSymbolText:
@@ -223,8 +421,10 @@ class TestParamsAffectResults:
         assert count(TEXT_TEXT, margin=1.0) > count(TEXT_TEXT, margin=0.0)
 
     def test_ignore_drops_a_named_item(self):
-        everything = count(TEXT_WIRE)
-        assert count(TEXT_WIRE, ignore=["SDA"]) == everything - 1
+        everything = run(TEXT_WIRE)
+        dropped = [o for o in everything.details["overlaps"] if o["first"] == "SDA"]
+        assert dropped, "the demo sheet should report SDA against a wire"
+        assert count(TEXT_WIRE, ignore=["SDA"]) == everything.details["count"] - len(dropped)
 
     def test_negative_margin_sheds_noise_rather_than_adding_it(self):
         assert count(TEXT_WIRE, margin=-0.2) < count(TEXT_WIRE)

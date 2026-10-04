@@ -3722,7 +3722,7 @@
 			)
 		)
 		(property "Value" "Battery"
-			(at 52.705 91.79 0)
+			(at 52.705 95.25 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -6081,6 +6081,50 @@
 				)
 			)
 		)
+	)
+	(no_connect
+		(at 199.39 93.98)
+		(uuid "cf4f53f7-508d-4c83-bd96-cf7bbb8c7dd9")
+	)
+	(no_connect
+		(at 199.39 96.52)
+		(uuid "c82bbcc8-8a0a-4b0b-9083-817f88b207c3")
+	)
+	(no_connect
+		(at 199.39 106.68)
+		(uuid "3c12f589-607b-438b-b37a-cc0843c638c3")
+	)
+	(no_connect
+		(at 199.39 109.22)
+		(uuid "5e4f7193-078e-4331-8090-e31d8d6d8ab7")
+	)
+	(no_connect
+		(at 199.39 116.84)
+		(uuid "7b026cf5-3a84-4475-8367-a70119020c0f")
+	)
+	(no_connect
+		(at 224.79 93.98)
+		(uuid "c49a24d3-e785-42ab-846c-6049d29a0ba8")
+	)
+	(no_connect
+		(at 224.79 96.52)
+		(uuid "35004407-aa80-479f-a5f9-53020b74e18e")
+	)
+	(no_connect
+		(at 224.79 101.6)
+		(uuid "4dcc7811-1d65-4875-92df-a6b2e13d6e33")
+	)
+	(no_connect
+		(at 224.79 116.84)
+		(uuid "c01aa761-4a10-4688-882e-1799d1420afc")
+	)
+	(no_connect
+		(at 224.79 109.22)
+		(uuid "a1cc8014-ce22-4d69-a9d6-9dfc4e42cfe7")
+	)
+	(no_connect
+		(at 224.79 119.38)
+		(uuid "e3f968ce-82d1-483b-97f4-74d66fa17e3b")
 	)
 	(sheet_instances
 		(path "/"

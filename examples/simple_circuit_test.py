@@ -41,6 +41,10 @@ schematic text with an opaque background that masks whatever is behind it, so a
 net label lying on the wire it labels is normal rendering, not a defect. The
 check still exists for anyone who wants it; see the note in ``overlaps.py``.
 
+``SymbolWireOverlapCheck`` and ``NoConnectFloatingCheck`` both hold here too:
+no wire runs back across a symbol's artwork, and every pin this sheet leaves
+open carries a no-connect flag.
+
 Usage:
 
     python examples/simple_circuit_test.py
@@ -66,7 +70,9 @@ from kicad_evaltor import (
     DesignContext,
     ERCRunCheck,
     FootprintAssignedCheck,
+    NoConnectFloatingCheck,
     SymbolSymbolOverlapCheck,
+    SymbolWireOverlapCheck,
     TestReport,
     TestRunner,
     TextOffSheetCheck,
@@ -141,6 +147,8 @@ def build_checks() -> list[Check]:
         TextTextOverlapCheck(),
         TextSymbolOverlapCheck(),
         SymbolSymbolOverlapCheck(),
+        SymbolWireOverlapCheck(),
+        NoConnectFloatingCheck(),
         TextOffSheetCheck(),
     ]
 
