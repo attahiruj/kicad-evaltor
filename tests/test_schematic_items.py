@@ -2,10 +2,11 @@ import math
 
 import pytest
 
-from kicad_evaltor.font_metrics import advance_width, line_height, text_cell_bbox
+from kicad_evaltor.font_metrics import line_height, text_extents
 from kicad_evaltor.geometry import BBox, Placement
-from kicad_evaltor.schematic_file import load_schematic
-from kicad_evaltor.schematic_items import DEFAULT_LINE_WIDTH, extract
+from kicad_evaltor.hierarchy import tree_for
+from kicad_evaltor.schematic_file import FileSchematic, load_schematic
+from kicad_evaltor.schematic_items import DEFAULT_LINE_WIDTH, SchematicScene, TextItem, extract
 from conftest import demo_schematic_path
 
 DEMO = demo_schematic_path()
@@ -32,8 +33,29 @@ WITH_USER_PROPERTY = """(kicad_sch (version 20250114) (generator "evaltor")
 
 
 @pytest.fixture(scope="module")
-def scene():
-    return extract(load_schematic(DEMO))
+def tree():
+    return tree_for(FileSchematic(DEMO))
+
+
+@pytest.fixture(scope="module")
+def scenes(tree):
+    """Every sheet's geometry in the demo, by sheet name.
+
+    The demo is a hierarchy, and a sheet is its own coordinate space, so there is
+    no longer one scene for the design: the root draws only sheet blocks, ``Main``
+    holds the parts, ``Power`` the power symbols and ``Shared`` the connector.
+    """
+    return {sheet.name: tree.scene_for(sheet) for sheet in tree.sheets()}
+
+
+@pytest.fixture(scope="module")
+def scene(scenes):
+    """The ``Main`` sheet, where the demo keeps the parts these tests read.
+
+    The properties and geometry under test belong to the design, not to one sheet,
+    so the assertions are unchanged; only where the design now lives has moved.
+    """
+    return scenes["Main"]
 
 
 def _extract(tmp_path, body: str, name: str = "probe.kicad_sch"):
@@ -145,27 +167,64 @@ class TestPinGeometry:
         # inside the inflated box rather than on its edge.
         assert component.pin_bboxes[0].contains_point(*connection.at)
 
-    def test_the_scene_reports_one_connection_per_pin(self, scene):
-        for component in scene.components:
-            assert len(component.pin_connections) == len(component.pin_bboxes)
+    def test_the_scene_reports_one_connection_per_pin(self, scenes):
+        for sheet_scene in scenes.values():
+            for component in sheet_scene.components:
+                assert len(component.pin_connections) == len(component.pin_bboxes)
 
 
 class TestWholeSheet:
-    def test_inventory_matches_the_demo_schematic(self, scene):
-        assert len(scene.components) == 34
-        assert len(scene.wires) == 58
-        assert len(scene.junctions) == 10
+    def test_inventory_matches_the_demo_schematic(self, scenes):
+        assert {name: len(s.components) for name, s in scenes.items()} == {
+            "simple_circuit_test": 0,
+            "Power": 19,
+            "Main": 14,
+            "Shared": 1,
+        }
+        assert sum(len(s.components) for s in scenes.values()) == 34
+        assert sum(len(s.no_connects) for s in scenes.values()) == 37
+
+    def test_the_split_needs_no_wires_for_its_own_connectivity(self, scenes):
+        # The 58 wires the flat demo drew all survive, spread over Main and Shared.
+        # The 27 extra are the ones the hierarchy needs and the flat design did
+        # not: eight joining the sheet pins on the root, and one stub under each of
+        # the 19 power symbols so its hierarchical label has somewhere to sit.
+        assert {name: len(s.wires) for name, s in scenes.items()} == {
+            "simple_circuit_test": 8,
+            "Power": 19,
+            "Main": 54,
+            "Shared": 4,
+        }
+        assert len(scenes["Main"].wires) + len(scenes["Shared"].wires) == 58
+
+    def test_the_root_sheet_draws_only_the_sheet_links(self, scenes):
+        root = scenes["simple_circuit_test"]
+        assert root.components == []
+        assert root.standalone_texts == []
+        assert len(root.junctions) == 4
 
     def test_texts_split_into_component_fields_and_labels(self, scene):
-        assert len(scene.standalone_texts) == 4
-        assert {t.content for t in scene.standalone_texts} == {"SDA", "SCL"}
+        local = [t for t in scene.standalone_texts if t.field == "label"]
+        assert {t.content for t in local} == {"SDA", "SCL"}
+
+    def test_hierarchical_labels_are_standalone_texts_of_their_own(self, scenes):
+        # The net names the split had to add where a power symbol used to be. They
+        # are the only standalone text on Power, and 17 of the 19 sit on Main: the
+        # other two are J1's, which went to Shared with it.
+        assert {t.content for t in scenes["Power"].standalone_texts} == {"GND", "+3.3V"}
+        assert len(scenes["Power"].standalone_texts) == 19
+        assert (
+            len([t for t in scenes["Main"].standalone_texts if t.field == "hierarchical_label"])
+            == 17
+        )
+        assert {t.content for t in scenes["Shared"].standalone_texts} == {"GND", "+3.3V"}
 
     def test_hidden_fields_are_not_extracted(self, scene):
         u1 = scene.component("U1")
         assert {t.field for t in u1.texts} == {"Reference", "Value"}
 
-    def test_power_symbols_are_flagged_and_carry_no_footprint(self, scene):
-        power = scene.power_components
+    def test_power_symbols_are_flagged_and_carry_no_footprint(self, scenes):
+        power = scenes["Power"].power_components
         assert len(power) == 19
         assert all(c.lib_id.startswith("power:") for c in power)
 
@@ -187,12 +246,13 @@ class TestComponents:
         assert box.width >= u1.body_bbox.width
         assert box.height >= u1.body_bbox.height
 
-    def test_symbol_origin_sits_inside_its_own_bbox(self, scene):
-        for comp in scene.components:
-            box = comp.bbox
-            if box is None:
-                continue
-            assert box.contains_point(comp.at.x, comp.at.y), comp.reference
+    def test_symbol_origin_sits_inside_its_own_bbox(self, scenes):
+        for name, sheet_scene in scenes.items():
+            for comp in sheet_scene.components:
+                box = comp.bbox
+                if box is None:
+                    continue
+                assert box.contains_point(comp.at.x, comp.at.y), f"{name}:{comp.reference}"
 
     def test_placement_is_carried_through(self, scene):
         assert scene.component("U1").at == Placement(99.06, 88.9, rotation=0.0)
@@ -203,15 +263,17 @@ class TestComponents:
         assert r1.properties["Value"] == "10k"
         assert r1.value == "10k"
 
-    def test_hidden_properties_are_not_reported(self, scene):
-        for comp in scene.components:
-            for text in comp.texts:
-                assert text.field in comp.properties, f"{comp.reference}.{text.field}"
+    def test_hidden_properties_are_not_reported(self, scenes):
+        for sheet_scene in scenes.values():
+            for comp in sheet_scene.components:
+                for text in comp.texts:
+                    assert text.field in comp.properties, f"{comp.reference}.{text.field}"
 
     def test_a_user_defined_property_is_kept_like_any_other(self, tmp_path):
         path = tmp_path / "lcsc.kicad_sch"
         path.write_text(WITH_USER_PROPERTY, encoding="utf-8")
         component = extract(load_schematic(path)).component("C1")
+        assert component is not None
         assert component.properties == {
             "Reference": "C1",
             "Value": "100nF",
@@ -221,44 +283,71 @@ class TestComponents:
         assert component.properties.get("Footprint") is None
 
 
+# Boxes read back from kicad-cli 10.0.1's SVG export of the demo's Main sheet:
+# the ink of each run of text, stroke width included.
+KICAD_DRAWN = {
+    "U1": (101.5406, 126.2333, 103.6888, 127.6557),
+    "SW1": (128.0389, 104.3893, 131.5779, 105.8117),
+}
+
+
 class TestTextGeometry:
-    def test_text_reserves_one_line_height(self, scene):
-        u1 = scene.component("U1")
-        reference = next(t for t in u1.texts if t.field == "Reference")
+    @staticmethod
+    def _reference(scene: SchematicScene, ref: str) -> TextItem:
+        component = scene.component(ref)
+        assert component is not None
+        return next(t for t in component.texts if t.field == "Reference")
+
+    def test_a_field_is_boxed_where_kicad_draws_it(self, scene):
+        reference = self._reference(scene, "U1")
         assert reference.rotation == 0.0
-        assert reference.bbox.height == pytest.approx(line_height(reference.size))
+        box = reference.bbox
+        assert (box.min_x, box.min_y, box.max_x, box.max_y) == pytest.approx(
+            KICAD_DRAWN["U1"], abs=0.001
+        )
+
+    def test_a_box_is_as_tall_as_its_letters_not_the_line(self, scene):
+        # Capitals and digits are one em tall, plus the stroke; the line cell
+        # KiCad justifies by is 1.17 em and would overstate it.
+        reference = self._reference(scene, "U1")
+        assert reference.bbox.height == pytest.approx(reference.size + DEFAULT_LINE_WIDTH)
+        assert reference.bbox.height < line_height(reference.size)
 
     def test_rotated_fields_render_flat(self, scene):
-        # SW1's reference is stored at 90 degrees on a symbol placed at 270, but
-        # KiCad draws the text flat.
-        sw1 = scene.component("SW1")
-        reference = next(t for t in sw1.texts if t.field == "Reference")
+        # SW1's reference is stored at 90 degrees on a symbol placed at 270, and
+        # the two turns cancel: KiCad draws the text flat.
+        reference = self._reference(scene, "SW1")
         assert reference.rotation == 0.0
-        flat = text_cell_bbox(reference.content, reference.size, (0.0, 0.0))
-        assert reference.bbox.width == pytest.approx(flat.width)
-        assert reference.bbox.height == pytest.approx(flat.height)
+        box = reference.bbox
+        assert (box.min_x, box.min_y, box.max_x, box.max_y) == pytest.approx(
+            KICAD_DRAWN["SW1"], abs=0.001
+        )
 
-    def test_reserved_width_is_the_advances_plus_a_stroke(self, scene):
-        for item in scene.component_texts:
-            extra = item.bbox.width - advance_width(item.content, item.size)
-            assert extra == pytest.approx(0.2, abs=0.01), item.content
+    def test_drawn_width_is_the_ink_plus_a_stroke(self, scenes):
+        for sheet_scene in scenes.values():
+            for item in sheet_scene.component_texts:
+                x0, _, x1, _ = text_extents(item.content, item.size)
+                across = item.bbox.width if item.rotation == 0.0 else item.bbox.height
+                assert across == pytest.approx(x1 - x0 + DEFAULT_LINE_WIDTH), item.content
 
 
 class TestWiresAndJunctions:
-    def test_wire_thickness_defaults_when_the_file_says_zero(self, scene):
-        assert all(w.width > 0 for w in scene.wires)
+    def test_wire_thickness_defaults_when_the_file_says_zero(self, scenes):
+        assert all(w.width > 0 for s in scenes.values() for w in s.wires)
 
-    def test_wire_bbox_is_the_segment_grown_by_half_the_width(self, scene):
-        wire = scene.wires[0]
-        half = wire.width / 2
-        assert wire.bbox.width == pytest.approx(abs(wire.end[0] - wire.start[0]) + 2 * half)
+    def test_wire_bbox_is_the_segment_grown_by_half_the_width(self, scenes):
+        wires = [w for s in scenes.values() for w in s.wires]
+        for wire in wires:
+            half = wire.width / 2
+            assert wire.bbox.width == pytest.approx(abs(wire.end[0] - wire.start[0]) + 2 * half)
 
-    def test_junction_points_land_on_the_demo_grid(self, scene):
-        # The demo sheet is laid out on KiCad's 1.27 mm grid.
-        for junction in scene.junctions:
-            x, y = junction.at
-            assert x == pytest.approx(round(x / 1.27) * 1.27, abs=1e-6)
-            assert y == pytest.approx(round(y / 1.27) * 1.27, abs=1e-6)
+    def test_junction_points_land_on_the_demo_grid(self, scenes):
+        # The demo sheets are laid out on KiCad's 1.27 mm grid.
+        for sheet_scene in scenes.values():
+            for junction in sheet_scene.junctions:
+                x, y = junction.at
+                assert x == pytest.approx(round(x / 1.27) * 1.27, abs=1e-6)
+                assert y == pytest.approx(round(y / 1.27) * 1.27, abs=1e-6)
 
 
 class TestPlacementTransforms:
@@ -376,3 +465,94 @@ class TestHiddenText:
         # standalone_texts is what the off-sheet check walks, so a hidden note
         # parked off the page must not turn into a finding.
         assert all("hidden" not in item.content.lower() for item in scene.standalone_texts)
+
+
+# Rotated text, with every box checked against kicad-cli 10.0.1's rendering of
+# this exact sheet. The probe symbol draws nothing, so only its fields matter.
+# Both fields of R1 sit 2.032 mm apart across the symbol, which reads as two
+# clear columns when the text is vertical and as an overlap if it were flat.
+ROTATED_TEXT = """(kicad_sch (version 20250114) (generator "evaltor")
+  (paper "A4")
+  (lib_symbols
+    (symbol "Test:Probe"
+      (property "Reference" "R?")
+      (property "Value" "?")
+      (symbol "Probe_0_1")))
+  (symbol (lib_id "Test:Probe") (at 50 50 0) (unit 1)
+    (property "Reference" "R1" (at 52.032 50 90) (effects (font (size 1.27 1.27))))
+    (property "Value" "10k" (at 50 50 90) (effects (font (size 1.27 1.27)))))
+  (symbol (lib_id "Test:Probe") (at 80 50 90) (mirror x) (unit 1)
+    (property "Reference" "R2" (at 80 50 0) (effects (font (size 1.27 1.27)) (justify left)))
+    (property "Value" "10k" (at 80 50 0) (effects (font (size 1.27 1.27)) (hide yes))))
+  (label "UP" (at 100 50 90) (effects (font (size 1.27 1.27)) (justify left bottom)))
+  (label "DOWN" (at 110 50 270) (effects (font (size 1.27 1.27)) (justify right bottom)))
+  (label "LEFT" (at 120 50 180) (effects (font (size 1.27 1.27)) (justify right bottom)))
+)
+"""
+
+ROTATED_DRAWN = {
+    "R1": (51.2653, 48.9257, 52.6877, 51.0134),
+    "10k": (49.2333, 48.4420, 50.6557, 51.5576),
+    "R2": (79.2333, 50.2767, 80.6557, 52.3644),
+    "UP": (98.1410, 47.4650, 99.5634, 49.6736),
+    "DOWN": (108.1410, 50.3264, 109.5634, 55.2564),
+    "LEFT": (115.8926, 48.1410, 119.8550, 49.5634),
+}
+
+
+class TestRotatedText:
+    @pytest.fixture
+    def scene(self, tmp_path):
+        path = tmp_path / "rotated_text.kicad_sch"
+        path.write_text(ROTATED_TEXT, encoding="utf-8")
+        return extract(load_schematic(path))
+
+    @staticmethod
+    def _text(scene: SchematicScene, content: str) -> TextItem:
+        return next(item for item in scene.texts if item.content == content)
+
+    @pytest.mark.parametrize("content", sorted(ROTATED_DRAWN))
+    def test_each_box_is_where_kicad_draws_it(self, scene, content):
+        box = self._text(scene, content).bbox
+        assert (box.min_x, box.min_y, box.max_x, box.max_y) == pytest.approx(
+            ROTATED_DRAWN[content], abs=0.001
+        )
+
+    def test_vertical_fields_get_vertical_boxes(self, scene):
+        r1 = scene.component("R1")
+        assert r1 is not None
+        for item in r1.texts:
+            assert item.rotation == 90.0
+            assert item.bbox.height > item.bbox.width
+
+    def test_side_by_side_vertical_fields_do_not_overlap(self, scene):
+        r1 = scene.component("R1")
+        assert r1 is not None
+        reference, value = sorted(r1.texts, key=lambda t: t.field)
+        assert not reference.bbox.intersects(value.bbox)
+
+    def test_a_field_turns_and_mirrors_with_its_symbol(self, scene):
+        # Left-justified flat text on a symbol at 90 degrees runs up from its
+        # anchor; mirroring about x then sends it down.
+        reference = self._text(scene, "R2")
+        assert reference.rotation == 90.0
+        assert reference.bbox.min_y > 50.0
+
+    def test_vertical_labels_run_the_way_their_justification_says(self, scene):
+        up = self._text(scene, "UP")
+        down = self._text(scene, "DOWN")
+        assert up.rotation == down.rotation == 90.0
+        assert up.bbox.max_y < 50.0 < down.bbox.min_y
+        # A label is drawn clear of its wire, which for vertical text is to its
+        # left.
+        assert up.bbox.max_x < 100.0
+        assert down.bbox.max_x < 110.0
+
+    def test_a_label_at_180_reads_flat_and_extends_left(self, scene):
+        left = self._text(scene, "LEFT")
+        assert left.rotation == 0.0
+        assert left.bbox.max_x < 120.0
+        assert left.bbox.max_y < 50.0
+
+    def test_a_label_is_anchored_where_it_connects(self, scene):
+        assert self._text(scene, "UP").anchor == (100.0, 50.0)

@@ -32,6 +32,10 @@ class CollisionItem:
     bbox: BBox
     owner: str | None = None
     properties: Mapping[str, str] = field(default_factory=dict)
+    # Items sharing a group are pieces of one drawn thing, such as a label's text
+    # and its flag. They are never paired with each other, and a pair of groups
+    # is reported once however many of their pieces touch.
+    group: object | None = field(default=None, compare=False, repr=False)
 
     def inflated(self, margin: float) -> BBox | None:
         """The box grown by ``margin``, or None if that would collapse it.
@@ -169,20 +173,34 @@ def colliding_pairs(
             reach.append((item, box, searched))
 
     found: list[Collision] = []
+    reported: set[tuple[int, int]] = set()
     for index, (item, box, searched) in enumerate(reach):
         for other, other_box, other_searched in reach[index + 1 :]:
             if other_searched.min_x >= searched.max_x:
                 break
             if ignore_same_owner and item.owner is not None and item.owner == other.owner:
                 continue
+            if item.group is not None and item.group is other.group:
+                continue
+            pair = _pair_key(item, other)
+            if pair in reported:
+                continue
             area = _overlap(box, other_box)
             if area is not None:
                 found.append(Collision(item, other, area))
+                reported.add(pair)
                 continue
             gap = box.clearance(other_box)
             if gap < clearance:
                 found.append(Collision(item, other, _touching(box, other_box), gap))
+                reported.add(pair)
     return found
+
+
+def _pair_key(item: CollisionItem, other: CollisionItem) -> tuple[int, int]:
+    first = id(item.group) if item.group is not None else id(item)
+    second = id(other.group) if other.group is not None else id(other)
+    return (min(first, second), max(first, second))
 
 
 def cross_kind(collisions: Iterable[Collision], first: str, second: str) -> list[Collision]:

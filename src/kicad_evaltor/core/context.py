@@ -12,7 +12,8 @@ if TYPE_CHECKING:
     from kipy.project import Project
     from kipy.schematic import Schematic
 
-from kicad_evaltor.schematic_file import FileSchematic, load_schematic
+from kicad_evaltor.hierarchy import SchematicTree, tree_for
+from kicad_evaltor.schematic_file import FileSchematic, FileSymbol, load_schematic
 from kicad_evaltor.utils.kicad_cli import SubprocessResult, run_kicad_cli
 
 
@@ -79,8 +80,54 @@ class DesignContext:
         if self._schematic is None:
             if not self.has_schematic():
                 raise ValueError("No schematic available")
-            self._schematic = load_schematic(self.schematic_path, cli_path=self._kicad_cli_path)
+            # The project folder goes with it: KiCad resolves a subsheet's
+            # relative Sheetfile against the project, not against the file that
+            # happens to contain the link.
+            self._schematic = load_schematic(
+                self.schematic_path,
+                cli_path=self._kicad_cli_path,
+                project_dir=self.project_dir,
+            )
         return self._schematic
+
+    def sheet_tree(self) -> SchematicTree | None:
+        """Every sheet the schematic draws, or None when it is not file-backed.
+
+        A KiCad schematic is a tree of files, and ``schematic`` is only its root.
+        Anything that has to see the whole design -- a component check looking
+        for a reference anywhere, a layout check that accepts a ``sheet``
+        selector -- goes through here instead of reading one file.
+        """
+        schematic = self.schematic
+        if not isinstance(schematic, FileSchematic):
+            return None
+        return tree_for(schematic)
+
+    def sheet_symbols(self) -> list[FileSymbol]:
+        """Every placed symbol in the design, each tagged with the sheet it sits on.
+
+        This is the design-wide counterpart to ``schematic.get_symbols()``, which
+        can only ever see the root file. A component-level question like "is
+        there an R1?" has the same answer whichever sheet R1 was drawn on, so it
+        should be asked here; geometry questions should not be, because two
+        sheets' coordinates are two coordinate spaces.
+        """
+        tree = self.sheet_tree()
+        if tree is not None:
+            return [symbol for _, symbol in tree.iter_symbols()]
+        # Not file-backed, so there is no tree to walk. The IPC schematic is flat
+        # anyway, and its symbols are the whole design.
+        schematic = self.schematic
+        return list(schematic.get_symbols()) if schematic is not None else []
+
+    @property
+    def project_dir(self) -> Path | None:
+        """The folder KiCad resolves a relative ``Sheetfile`` against.
+
+        None when the caller only named a schematic file, in which case the file's
+        own folder stands in and a link to a sibling sheet still resolves.
+        """
+        return self._project_path.parent if self._project_path else None
 
     @property
     def board(self) -> Board:

@@ -15,26 +15,31 @@ Three deliberate modelling choices:
 * The two checks that answer a legibility question -- text against text, and text
   against a symbol -- also reject anything inside ``clearance`` of touching. The
   others report strict overlap. See ``OverlapParams``.
+
+One sheet is one coordinate space with its own paper size, so no two sheets'
+items can be compared to each other. Each check therefore runs once per selected
+sheet and its findings are concatenated, with ``count`` and ``checked`` totalled
+across the run. See ``OverlapParams.sheet``.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from kicad_evaltor.checks.base import Check, CheckCategory, CheckParams, CheckResult
 from kicad_evaltor.checks.registry import register
 from kicad_evaltor.collisions import Collision, CollisionItem, colliding_pairs, cross_kind
 from kicad_evaltor.core.context import DesignContext
 from kicad_evaltor.geometry import BBox, Point
+from kicad_evaltor.hierarchy import SheetTarget, select_targets, tree_for
 from kicad_evaltor.schematic_file import FileSchematic
 from kicad_evaltor.schematic_items import (
     Component,
     PinConnection,
     SchematicScene,
     WireSegment,
-    extract,
 )
 
 
@@ -57,11 +62,19 @@ class OverlapParams(CheckParams):
 
     ``ignore`` drops named items, which is how a project silences a placement it
     has accepted.
+
+    ``sheet`` chooses which sheets to look at. ``None`` is the root sheet only,
+    which is what a flat design means by "the sheet"; ``"all"`` is every sheet in
+    the tree; anything else is one sheet, named by ``Sheetname``, uuid instance
+    path or linked-file stem. A name that matches nothing skips the check and
+    lists the names that would have worked, rather than reporting no findings as
+    though the design were clean.
     """
 
     margin: float = 0.0
     clearance: float = 0.2
     ignore: list[str] = field(default_factory=list)
+    sheet: str | None = None
 
     def validate(self) -> None:
         # A margin larger than the geometry it applies to collapses boxes, which
@@ -70,24 +83,88 @@ class OverlapParams(CheckParams):
         for name, value in (("margin", self.margin), ("clearance", self.clearance)):
             if isinstance(value, bool) or not isinstance(value, int | float):
                 raise TypeError(f"{name} must be a number, got {value!r}")
+        if self.sheet is not None and not isinstance(self.sheet, str):
+            raise TypeError(f"sheet must be a string or None, got {self.sheet!r}")
 
 
-def _scene(ctx: DesignContext) -> tuple[SchematicScene | None, CheckResult | None]:
-    """Extract the sheet geometry, or explain why the check cannot run."""
+# One sheet's findings on their way into a run's totals. ``extra`` accumulates
+# rather than overwrites, so a per-sheet fact such as a paper size survives the
+# sum instead of the last sheet winning.
+@dataclass
+class _Findings:
+    summaries: list[str] = field(default_factory=list)
+    details: list[dict[str, Any]] = field(default_factory=list)
+    checked: int = 0
+    extra: dict[str, list[Any]] = field(default_factory=dict)
+
+    def add(self, other: _Findings) -> None:
+        self.summaries.extend(other.summaries)
+        self.details.extend(other.details)
+        self.checked += other.checked
+        for key, values in other.extra.items():
+            self.extra.setdefault(key, []).extend(values)
+
+
+def _targets(
+    ctx: DesignContext, check_id: str, selector: str | None
+) -> tuple[list[SheetTarget] | None, CheckResult | None]:
+    """The sheets to look at, or the reason the check cannot run at all."""
     if not ctx.has_schematic():
         return None, None
     schematic = ctx.schematic
     if not isinstance(schematic, FileSchematic):
+        return None, CheckResult.skip(check_id, "Layout checks read the .kicad_sch file directly")
+    tree = tree_for(schematic)
+    targets, found = select_targets(tree, selector)
+    if not found:
         return None, CheckResult.skip(
-            "sch.layout", "Layout checks read the .kicad_sch file directly"
+            check_id, f"Unknown sheet {selector!r}", sheets=[s.name for s in tree.sheets()]
         )
-    return extract(schematic), None
+    return targets, None
+
+
+def _over_sheets(
+    ctx: DesignContext, check_id: str, selector: str | None, body
+) -> tuple[_Findings | None, CheckResult | None]:
+    """Run one sheet's worth of work for each selected sheet and total the findings."""
+    targets, blocker = _targets(ctx, check_id, selector)
+    if blocker is not None:
+        return None, blocker
+    if targets is None:
+        return None, CheckResult.skip(check_id, "No schematic available")
+    totals = _Findings()
+    for target in targets:
+        totals.add(body(target))
+    return totals, None
+
+
+def _qualified(items: list[CollisionItem], prefix: str) -> list[CollisionItem]:
+    """Copy ``items`` with their labels qualified by ``prefix``."""
+    if not prefix:
+        return items
+    return [replace(item, label=f"{prefix}{item.label}") for item in items]
 
 
 def _text_items(scene: SchematicScene) -> list[CollisionItem]:
+    """One item per drawn piece of text: a label's flag is measured apart from its
+    letters, so the empty corners of the box around both never collide."""
+    return [
+        CollisionItem("text", t.label, piece, t.owner, {t.field: t.content}, group=t)
+        for t in scene.texts
+        for piece in t.pieces
+    ]
+
+
+def _whole_text_items(scene: SchematicScene) -> list[CollisionItem]:
+    """One item per run of text, boxing all of its pieces together."""
     return [
         CollisionItem("text", t.label, t.bbox, t.owner, {t.field: t.content}) for t in scene.texts
     ]
+
+
+def _distinct(items: list[CollisionItem]) -> int:
+    """How many drawn things ``items`` covers, counting a label's pieces once."""
+    return len({id(item.group) if item.group is not None else id(item) for item in items})
 
 
 def _symbol_items(scene: SchematicScene, *, include_pins: bool) -> list[CollisionItem]:
@@ -163,27 +240,32 @@ class _OverlapCheck(Check[OverlapParams]):
         return collisions
 
     def run(self, ctx: DesignContext) -> CheckResult:
-        scene, blocker = _scene(ctx)
+        findings, blocker = _over_sheets(ctx, self.id, self.params.sheet, self._run_sheet)
         if blocker is not None:
             return blocker
-        if scene is None:
-            return CheckResult.skip(self.id, "No schematic available")
+        assert findings is not None
+        result = _report(self.id, findings.summaries, findings.details, findings.checked)
+        result.details["margin"] = self.params.margin
+        return result
 
-        items = _drop_ignored(self.items(scene), self.params.ignore)
+    def _run_sheet(self, target: SheetTarget) -> _Findings:
+        """This check's findings on one sheet.
+
+        ``ignore`` is applied before the sheet prefix, so an accepted placement is
+        named the same way on every sheet: ``ignore=["SDA"]`` silences ``SDA`` on
+        the root and ``Main.SDA`` on a subsheet.
+        """
+        items = _qualified(
+            _drop_ignored(self.items(target.scene), self.params.ignore), target.prefix
+        )
         collisions = self.filter(
             colliding_pairs(items, margin=self.params.margin, clearance=self.required_clearance())
         )
-        return self._result(items, collisions)
-
-    def _result(self, items: list[CollisionItem], collisions: list) -> CheckResult:
-        result = _report(
-            self.id,
-            [c.describe() for c in collisions],
-            [c.as_dict() for c in collisions],
-            len(items),
+        return _Findings(
+            summaries=[c.describe() for c in collisions],
+            details=[c.as_dict() for c in collisions],
+            checked=_distinct(items),
         )
-        result.details["margin"] = self.params.margin
-        return result
 
 
 @register
@@ -191,7 +273,7 @@ class TextTextOverlapCheck(_OverlapCheck):
     """Reports text drawn on top of other text, or too near it to read.
 
     Two values in a row have no outline to hide behind, so the clearance is what
-    makes this check useful: a 0.2mm gap between two cells is enough to read
+    makes this check useful: a 0.2mm gap between two runs of ink is enough to read
     both, and anything tighter is not.
     """
 
@@ -234,17 +316,25 @@ class TextSymbolOverlapCheck(_OverlapCheck):
         return self.params.clearance
 
     def run(self, ctx: DesignContext) -> CheckResult:
-        scene, blocker = _scene(ctx)
+        findings, blocker = _over_sheets(ctx, self.id, self.params.sheet, self._run_sheet)
         if blocker is not None:
             return blocker
-        if scene is None:
-            return CheckResult.skip(self.id, "No schematic available")
+        assert findings is not None
+        result = _report(self.id, findings.summaries, findings.details, findings.checked)
+        result.details["margin"] = self.params.margin
+        return result
 
+    def _run_sheet(self, target: SheetTarget) -> _Findings:
         ignore = self.params.ignore
         clearance = self.required_clearance()
-        texts = _drop_ignored(_text_items(scene), ignore)
-        bodies = _drop_ignored(_symbol_items(scene, include_pins=False), ignore)
-        pinned = _drop_ignored(_symbol_items(scene, include_pins=True), ignore)
+        scene = target.scene
+        texts = _qualified(_drop_ignored(_text_items(scene), ignore), target.prefix)
+        bodies = _qualified(
+            _drop_ignored(_symbol_items(scene, include_pins=False), ignore), target.prefix
+        )
+        pinned = _qualified(
+            _drop_ignored(_symbol_items(scene, include_pins=True), ignore), target.prefix
+        )
 
         def against(symbols: list[CollisionItem]) -> list:
             pairs = colliding_pairs(texts + symbols, margin=self.params.margin, clearance=clearance)
@@ -258,7 +348,11 @@ class TextSymbolOverlapCheck(_OverlapCheck):
 
         collisions = [c for c in against(bodies) if own(c) and straddles(c)]
         collisions += [c for c in against(pinned) if not own(c)]
-        return self._result(texts + pinned, collisions)
+        return _Findings(
+            summaries=[c.describe() for c in collisions],
+            details=[c.as_dict() for c in collisions],
+            checked=_distinct(texts) + len(pinned),
+        )
 
 
 @register
@@ -311,17 +405,20 @@ class SymbolWireOverlapCheck(Check[OverlapParams]):
     Params: ClassVar[type[OverlapParams]] = OverlapParams
 
     def run(self, ctx: DesignContext) -> CheckResult:
-        scene, blocker = _scene(ctx)
+        findings, blocker = _over_sheets(ctx, self.id, self.params.sheet, self._run_sheet)
         if blocker is not None:
             return blocker
-        if scene is None:
-            return CheckResult.skip(self.id, "No schematic available")
+        assert findings is not None
+        result = _report(self.id, findings.summaries, findings.details, findings.checked)
+        result.details["margin"] = self.params.margin
+        return result
 
+    def _run_sheet(self, target: SheetTarget) -> _Findings:
         ignore = set(self.params.ignore)
-        wires = [w for w in scene.wires if w.label not in ignore]
+        wires = [w for w in target.scene.wires if w.label not in ignore]
         bodies = [
             (component, component.body_bbox)
-            for component in scene.components
+            for component in target.scene.components
             if component.body_bbox is not None and component.reference not in ignore
         ]
 
@@ -329,17 +426,18 @@ class SymbolWireOverlapCheck(Check[OverlapParams]):
             collision
             for wire in wires
             for component, body in bodies
-            if (collision := _buried_wire(wire, component, body)) is not None
+            if (collision := _buried_wire(wire, component, body, target.prefix)) is not None
         ]
-        return _report(
-            self.id,
-            [c.describe() for c in collisions],
-            [c.as_dict() for c in collisions],
-            len(wires) + len(bodies),
+        return _Findings(
+            summaries=[c.describe() for c in collisions],
+            details=[c.as_dict() for c in collisions],
+            checked=len(wires) + len(bodies),
         )
 
 
-def _buried_wire(wire: WireSegment, component: Component, body: BBox) -> Collision | None:
+def _buried_wire(
+    wire: WireSegment, component: Component, body: BBox, prefix: str
+) -> Collision | None:
     """The finding for one wire over one body, or None when the wire connects."""
     shared = body.intersection(wire.bbox)
     if shared is None:
@@ -348,7 +446,7 @@ def _buried_wire(wire: WireSegment, component: Component, body: BBox) -> Collisi
     if pin is not None and not _runs_backwards(wire, pin):
         return None
     symbol = CollisionItem(
-        "symbol", component.reference, body, component.reference, component.properties
+        "symbol", f"{prefix}{component.reference}", body, component.reference, component.properties
     )
     return Collision(symbol, CollisionItem("wire", wire.label, wire.bbox), shared)
 
@@ -406,40 +504,57 @@ class SymbolSymbolOverlapCheck(_OverlapCheck):
 
 @register
 class TextOffSheetCheck(_OverlapCheck):
+    """Reports text placed outside the drawing area of the sheet it is drawn on.
+
+    The one layout check that cannot be run off a shared scene alone: each sheet
+    has its own paper size, so a subsheet's text is measured against *its* paper
+    and never against the root's. ``details["sheet"]`` stays the size of the first
+    sheet the run covered -- the root's, which is what a single-sheet caller has
+    always read -- and ``details["sheets"]`` lists every sheet with its own size.
+    """
+
     id = "sch.layout.text_off_sheet"
     name = "Text Outside Sheet"
     description = "Reports text placed outside the drawing area of the sheet"
     category = CheckCategory.SCHEMATIC
 
     def run(self, ctx: DesignContext) -> CheckResult:
-        if not ctx.has_schematic():
-            return CheckResult.skip(self.id, "No schematic available")
-        schematic = ctx.schematic
-        if not isinstance(schematic, FileSchematic):
-            return CheckResult.skip(self.id, "Layout checks read the .kicad_sch file directly")
+        findings, blocker = _over_sheets(ctx, self.id, self.params.sheet, self._run_sheet)
+        if blocker is not None:
+            return blocker
+        assert findings is not None
+        sizes = findings.extra["sizes"]
+        result = _report(self.id, findings.summaries, findings.details, findings.checked)
+        result.details["sheet"] = sizes[0]["size"] if sizes else []
+        result.details["sheets"] = sizes
+        result.details["margin"] = self.params.margin
+        return result
 
-        scene = extract(schematic)
-        width, height = schematic.sheet_size()
-        sheet = BBox(0.0, 0.0, width, height)
+    def _run_sheet(self, target: SheetTarget) -> _Findings:
+        sheet = target.sheet
+        # The paper size comes from the file this sheet is drawn on, which is the
+        # only place it is written down.
+        width, height = target.schematic.sheet_size()
+        drawing_area = BBox(0.0, 0.0, width, height)
 
-        items = _drop_ignored(_text_items(scene), self.params.ignore)
+        items = _qualified(
+            _drop_ignored(_whole_text_items(target.scene), self.params.ignore), target.prefix
+        )
         # Growing the sheet by the margin is how a margin reads here: text is
         # allowed to sit that far past the edge before it counts as off-sheet.
-        allowed = sheet.inflate(self.params.margin)
+        allowed = drawing_area.inflate(self.params.margin)
         outside = [item for item in items if not allowed.contains(item.bbox)]
-        result = _report(
-            self.id,
-            [f"{item.label} lies outside the sheet" for item in outside],
-            [
+        return _Findings(
+            summaries=[f"{item.label} lies outside the sheet" for item in outside],
+            details=[
                 {
                     "label": item.label,
+                    "sheet": sheet.name,
                     "properties": dict(item.properties),
                     "bbox": [item.bbox.min_x, item.bbox.min_y, item.bbox.max_x, item.bbox.max_y],
                 }
                 for item in outside
             ],
-            len(items),
+            checked=len(items),
+            extra={"sizes": [{"sheet": sheet.name, "size": [width, height]}]},
         )
-        result.details["sheet"] = [width, height]
-        result.details["margin"] = self.params.margin
-        return result

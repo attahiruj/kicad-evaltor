@@ -180,10 +180,10 @@ def _local_cell(
     height = line_height(size)
 
     horizontal = (justify_h or "center").lower()
-    # KiCad anchors left- and right-justified text at the left edge of the text
-    # cell; only the unjustified default centres it.
-    if horizontal in ("left", "right"):
+    if horizontal == "left":
         left = 0.0
+    elif horizontal == "right":
+        left = -width
     elif horizontal in ("center", "centre", "middle"):
         left = -width / 2.0
     else:
@@ -229,8 +229,9 @@ def text_cell_bbox(
     an unjustified item's ink sits wherever its glyph bearings put it inside a
     centred cell.
 
-    ``at`` is the sheet anchor, because that is where KiCad stores a field: its
-    position is absolute and its angle is not applied to the glyphs.
+    The cell is for text read left to right. ``at`` is the sheet anchor; turning
+    the cell for vertical text, or for a field on a rotated symbol, is the
+    caller's job, because the rules differ between fields and labels.
 
     ``justify_h`` is ``left``, ``right``, ``center`` or None for KiCad's
     centred default; ``justify_v`` is ``top``, ``bottom``, ``middle`` or None.

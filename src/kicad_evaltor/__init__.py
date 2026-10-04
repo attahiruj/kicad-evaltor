@@ -18,6 +18,10 @@ from kicad_evaltor.checks import (
     FootprintOverlapCheck,
     NoConnectFloatingCheck,
     PowerPourCheck,
+    SheetCycleCheck,
+    SheetFileMissingCheck,
+    SheetNameOrPageCollisionCheck,
+    SheetPinMismatchCheck,
     SymbolInLibraryCheck,
     SymbolSymbolOverlapCheck,
     SymbolWireOverlapCheck,
@@ -31,7 +35,9 @@ from kicad_evaltor.checks import (
     register,
 )
 from kicad_evaltor.core import DesignContext, TestReport, TestRunner
+from kicad_evaltor.hierarchy import SchematicTree
 from kicad_evaltor.models import Component, Net, Pin, Track
+from kicad_evaltor.sheets import Sheet
 from kicad_evaltor.utils import (
     SubprocessResult,
     filter_violations_by_severity,
@@ -73,6 +79,12 @@ __all__ = [
     "NoConnectFloatingCheck",
     "Pin",
     "PowerPourCheck",
+    "SchematicTree",
+    "Sheet",
+    "SheetCycleCheck",
+    "SheetFileMissingCheck",
+    "SheetNameOrPageCollisionCheck",
+    "SheetPinMismatchCheck",
     "SubprocessResult",
     "SymbolInLibraryCheck",
     "SymbolSymbolOverlapCheck",

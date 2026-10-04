@@ -263,10 +263,24 @@ class TestPlacement:
     def test_mirror_y_flips_local_x(self):
         assert Placement(0.0, 0.0, mirror="y").apply(1.0, 2.0) == (-1.0, -2.0)
 
-    def test_mirror_applies_before_rotation(self):
-        placement = Placement(0.0, 0.0, rotation=90.0, mirror="y")
-        # local (1, 2) -> mirror -> (-1, 2) -> flip -> (-1, -2) -> rotate -90 -> (-2, 1)
-        assert placement.apply(1.0, 2.0) == (-2.0, 1.0)
+    def test_mirror_applies_after_rotation(self):
+        # Measured from kicad-cli: a library L from (0, 0) through (3, 0) to
+        # (3, 1), placed at 90 degrees, is mirrored on the sheet after it turns.
+        # Mirroring first would send both of these the opposite way.
+        mirror_x = Placement(0.0, 0.0, rotation=90.0, mirror="x")
+        mirror_y = Placement(0.0, 0.0, rotation=90.0, mirror="y")
+
+        assert mirror_x.apply(3.0, 0.0) == (0.0, 3.0)
+        assert mirror_x.apply(3.0, 1.0) == (-1.0, 3.0)
+        assert mirror_y.apply(3.0, 0.0) == (0.0, -3.0)
+        assert mirror_y.apply(3.0, 1.0) == (1.0, -3.0)
+
+    def test_orient_turns_a_sheet_offset_with_the_symbol(self):
+        # A field laid out to the right of its anchor runs up the sheet once the
+        # symbol is turned 90 degrees, and down once that is mirrored about x.
+        assert Placement(0.0, 0.0, rotation=90.0).orient(1.0, 0.0) == (0.0, -1.0)
+        assert Placement(0.0, 0.0, rotation=90.0, mirror="x").orient(1.0, 0.0) == (0.0, 1.0)
+        assert Placement(0.0, 0.0, mirror="x").orient(0.0, 1.0) == (0.0, -1.0)
 
     def test_rejects_unknown_mirror(self):
         with pytest.raises(ValueError, match="mirror"):

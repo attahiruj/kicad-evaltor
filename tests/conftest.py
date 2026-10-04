@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +123,162 @@ def api_server_available(kicad_cli) -> bool:
     if kicad_cli is None:
         return False
     return kicad_cli_supports("api-server", kicad_cli)
+
+
+# ---------------------------------------------------------------- sheet trees
+#
+# Hierarchical tests need designs with shapes nobody would draw on purpose: a
+# link that points nowhere, a directory where a file should be, a sheet that links
+# back to its own ancestor, one file instantiated twice. They are built here
+# rather than in each test so no test has to hand-write an s-expression, and so a
+# change to the file format is fixed in one place.
+
+
+def _uuid(tag: str) -> str:
+    """A stable uuid for a tag, so a tree's shape is readable in a failure."""
+    digits = f"{abs(hash(tag)) % (16**12):012x}"
+    return f"{tag[:8]}-{digits[:4]}-{digits[4:8]}-{digits[8:12]}-{digits[:12]}"
+
+
+def sheet_symbol(
+    name: str,
+    filename: str,
+    *,
+    uuid: str,
+    pins: Sequence[str] = (),
+    page: str | None = None,
+    project: str = "proj",
+    parent_uuid: str | None = None,
+) -> str:
+    """One ``(sheet ...)`` block linking to a child file."""
+    at_x, at_y, width, height = 50.8, 25.4, 38.1, 25.4
+    pin_text = "".join(
+        f'\t\t(pin "{pin}" input\n'
+        f"\t\t\t(at {at_x + 8 + 16 * i:g} {at_y + height:g} 270)\n"
+        f'\t\t\t(uuid "{_uuid(f"{name}-pin-{pin}")}")\n'
+        "\t\t\t(effects\n\t\t\t\t(font (size 1.27 1.27))\n\t\t\t\t(justify right)\n\t\t\t)\n\t\t)\n"
+        for i, pin in enumerate(pins)
+    )
+    page_text = f'\n\t\t\t\t\t(page "{page}")' if page else ""
+    instance = (
+        f'\t\t(instances\n\t\t\t(project "{project}"\n'
+        f'\t\t\t\t(path "{"/" if parent_uuid is None else "/" + parent_uuid}'
+        f'/{uuid}"{page_text}\n\t\t\t\t)\n\t\t\t)\n\t\t)\n'
+        if project
+        else ""
+    )
+    return (
+        "\t(sheet\n"
+        f"\t\t(at {at_x:g} {at_y:g})\n\t\t(size {width:g} {height:g})\n"
+        "\t\t(exclude_from_sim no)\n\t\t(in_bom yes)\n\t\t(on_board yes)\n\t\t(dnp no)\n"
+        "\t\t(fields_autoplaced yes)\n"
+        "\t\t(stroke\n\t\t\t(width 0.1524)\n\t\t\t(type solid)\n\t\t)\n"
+        "\t\t(fill\n\t\t\t(color 0 0 0 0.0000)\n\t\t)\n"
+        f'\t\t(uuid "{uuid}")\n'
+        f'\t\t(property "Sheetname" "{name}"\n\t\t\t(at {at_x + width / 2:g} {at_y + 2.54:g} 0)\n'
+        "\t\t\t(effects\n\t\t\t\t(font (size 1.27 1.27))\n\t\t\t\t(justify bottom)\n\t\t\t)\n\t\t)\n"
+        f'\t\t(property "Sheetfile" "{filename}"\n\t\t\t(at {at_x + width / 2:g} {at_y + height - 2.54:g} 0)\n'
+        "\t\t\t(hide yes)\n"
+        "\t\t\t(effects\n\t\t\t\t(font (size 1.27 1.27))\n\t\t\t\t(justify top)\n\t\t\t)\n\t\t)\n"
+        f"{pin_text}{instance}\t)\n"
+    )
+
+
+def hierarchical_label(name: str, x: float = 76.2, y: float = 50.8) -> str:
+    """One ``(hierarchical_label ...)`` inside a child file."""
+    return (
+        f'\t(hierarchical_label "{name}"\n\t\t(shape input)\n\t\t(at {x:g} {y:g} 0)\n'
+        "\t\t(effects\n\t\t\t(font (size 1.27 1.27))\n\t\t\t(justify)\n\t\t)\n"
+        f'\t\t(uuid "{_uuid(f"label-{name}")}")\n\t)\n'
+    )
+
+
+def schematic_file(
+    path: Path,
+    *,
+    uuid: str,
+    body: str = "",
+    paper: str = "A4",
+    sheet_instances: bool = True,
+) -> Path:
+    """Write a minimal, valid ``.kicad_sch`` and return its path.
+
+    The document is genuinely empty apart from ``body``, so a test can say exactly
+    which nodes it is about and nothing else perturbs the result.
+    """
+    pages = (
+        '\t(sheet_instances\n\t\t(path "/"\n\t\t\t(page "1")\n\t\t)\n\t)\n'
+        if sheet_instances
+        else ""
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f'(kicad_sch\n\t(version 20250114)\n\t(generator "evaltor")\n\t(generator_version "1")\n'
+        f'\t(uuid "{uuid}")\n\t(paper "{paper}")\n\t(lib_symbols)\n{body}{pages}'
+        "\t(embedded_fonts no)\n)\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.fixture
+def hierarchical_design(tmp_path):
+    """Build sheet trees on disk, one call per shape.
+
+    Returns a callable taking the child files to write and returning the root path,
+    so a test reads as the tree it means. Each key names both the child file and
+    the sheet symbol pointing at it. A value is the child's body; ``None`` means a
+    directory sitting where a file should be, and a dict of ``body`` / ``pins``
+    overrides the shape of the link:
+
+        hierarchical_design({"main": ""})
+        hierarchical_design({"plain": {"body": "", "pins": ()}})
+        hierarchical_design({"missing": None})
+
+    Pairs are given distinct page numbers, because a page number shared by two
+    sheets is a defect under test rather than a thing every test should trip.
+    """
+    created: list[Path] = []
+
+    def build(
+        children: dict[str, object], *, root_body: str | None = None, root_uuid: str | None = None
+    ):
+        root = tmp_path / "root.kicad_sch"
+        created.append(root)
+        for name, target in children.items():
+            if isinstance(target, Path):
+                continue
+            if target is None:
+                (tmp_path / f"{name}.kicad_sch").mkdir(parents=True, exist_ok=True)
+                continue
+            shape = target if isinstance(target, dict) else {"body": target}
+            schematic_file(
+                tmp_path / f"{name}.kicad_sch",
+                uuid=_uuid(name),
+                body=str(shape.get("body", "")),
+            )
+        root_text = root_body
+        if root_text is None:
+            root_text = "".join(
+                sheet_symbol(
+                    name,
+                    f"{name}.kicad_sch",
+                    uuid=_uuid(f"sheet-{name}"),
+                    pins=_pins(children[name]),
+                    page=str(index + 2),
+                )
+                for index, name in enumerate(children)
+            )
+        return schematic_file(root, uuid=root_uuid or _uuid("root"), body=root_text)
+
+    return build
+
+
+def _pins(target: object) -> tuple[str, ...]:
+    """The pins a generated sheet symbol carries, defaulting to a power pair."""
+    if isinstance(target, dict):
+        return tuple(target.get("pins", ("+3.3V", "GND")))
+    return ("+3.3V", "GND")
 
 
 def mm(value: float) -> int:
@@ -369,6 +526,14 @@ class FakeContext:
     def schematic(self) -> FakeSchematic:
         assert self._schematic is not None
         return self._schematic
+
+    def sheet_symbols(self) -> list[object]:
+        """The design's symbols, flattened across sheets.
+
+        A fake schematic stands for a single flat sheet, so the whole design is
+        one file's symbols and the tree traversal has nothing to add.
+        """
+        return self.schematic.get_symbols()
 
     @property
     def board(self) -> FakeBoard:

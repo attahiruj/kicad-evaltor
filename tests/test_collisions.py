@@ -131,6 +131,33 @@ class TestOwnerFiltering:
         assert len(colliding_pairs([a, b], ignore_same_owner=True)) == 1
 
 
+class TestGroups:
+    """Pieces of one drawn thing, such as a label's text and its flag."""
+
+    def test_pieces_of_one_thing_never_collide_with_each_other(self):
+        group = object()
+        text = CollisionItem("text", "GND", BBox(0, 0, 4, 1), group=group)
+        flag = CollisionItem("text", "GND", BBox(1, 0, 2, 1), group=group)
+        assert colliding_pairs([text, flag]) == []
+
+    def test_a_thing_is_reported_once_however_many_pieces_touch(self):
+        group = object()
+        text = CollisionItem("text", "GND", BBox(0, 0, 4, 1), group=group)
+        flag = CollisionItem("text", "GND", BBox(3, 0, 5, 1), group=group)
+        wall = item("wall", 3.5, 0, 6, 1)
+        found = colliding_pairs([text, flag, wall])
+        assert [(c.first.label, c.second.label) for c in found] == [("GND", "wall")]
+
+    def test_the_empty_corner_between_pieces_collides_with_nothing(self):
+        # Text centred over a small flag leaves the box around both mostly empty
+        # where the flag is not; something there is clear of both pieces.
+        group = object()
+        text = CollisionItem("text", "+3.3V", BBox(0, 1, 6, 2), group=group)
+        flag = CollisionItem("text", "+3.3V", BBox(1, 0, 2, 1.2), group=group)
+        corner = item("C4.Value", 5, 0, 7, 0.9)
+        assert colliding_pairs([text, flag, corner]) == []
+
+
 class TestPairEnumeration:
     def test_every_unordered_pair_is_reported_once(self):
         items = [item("a", 0, 0, 10, 10), item("b", 1, 1, 11, 11), item("c", 2, 2, 12, 12)]

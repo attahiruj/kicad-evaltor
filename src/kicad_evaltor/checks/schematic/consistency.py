@@ -31,7 +31,7 @@ class ConsistencyCheck(Check[ConsistencyParams]):
             return CheckResult.skip(self.id, "Both schematic and board required")
 
         params = self.params
-        symbols = ctx.schematic.get_symbols()
+        symbols = ctx.sheet_symbols()
         footprints = ctx.board.get_footprints()
 
         sch_refs = {s.reference for s in symbols}

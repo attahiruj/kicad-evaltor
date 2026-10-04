@@ -65,7 +65,13 @@ A complete, runnable example lives in
 [`examples/simple_circuit_test.py`](examples/simple_circuit_test.py), which runs
 the schematic checks against
 [`examples/demo_circuit/simple_circuit_test.kicad_sch`](examples/demo_circuit/simple_circuit_test.kicad_sch).
-It exits non-zero if that sheet stops matching its documented expectations, so it
+That demo is deliberately hierarchical — a root holding only sheet blocks, plus
+`Main`, `Power`, and a `Shared` sheet reached through `../demo_shared/` — so the
+tree is exercised for real rather than described in prose. Splitting a schematic
+does not change its netlist: exporting the root gives the same 46 nets and 15 BOM
+components as the flat file did, with identical net names.
+
+It exits non-zero if the design stops matching its documented expectations, so it
 doubles as a smoke test:
 
 ```bash
@@ -100,9 +106,64 @@ python examples/visual_test.py path/to/your.kicad_sch          # any other sheet
 | `sch.symbol.in_library` | `SymbolInLibraryCheck` | A symbol exists in the project libraries |
 | `sch.erc` | `ERCRunCheck` | Runs ERC via `kicad-cli` and filters by severity |
 
+### Hierarchical sheets
+
+A KiCad schematic is a tree of files: the root draws `(sheet ...)` blocks, and
+each block links to another file. Every check above works across that whole tree,
+so `ComponentExistsCheck(reference="U1")` finds U1 whether it was drawn on the
+root or four levels down. A reference means one thing in a design; which sheet it
+happens to sit on is not part of the question.
+
+Four checks are about the hierarchy itself. They read the files directly and skip
+cleanly when the context has no file-backed schematic.
+
+| Check ID | Class | Description |
+|----------|-------|-------------|
+| `sch.sheet.file_missing` | `SheetFileMissingCheck` | A `Sheetfile` resolves to a readable `.kicad_sch` |
+| `sch.sheet.cycle` | `SheetCycleCheck` | The sheet links contain no cycle |
+| `sch.sheet.pin_mismatch` | `SheetPinMismatchCheck` | Every sheet pin has a matching hierarchical label, and the reverse |
+| `sch.sheet.name_or_page_collision` | `SheetNameOrPageCollisionCheck` | Two sibling sheets share a name, or two sheets share a page number |
+
+`sch.sheet.file_missing` distinguishes a `Sheetfile` that names nothing on disk
+from one that does not parse, because the two mean different things. Relative
+paths resolve against the **project** folder first, the way KiCad resolves them,
+then against the folder of the file holding the link — so a `Sheetfile` of
+`../shared/shared.kicad_sch` works from a subdirectory.
+
+`sch.sheet.cycle` is keyed on the path taken to reach a sheet, not on the files
+seen so far: KiCad legitimately instantiates one file under several sheet
+symbols, and only a path that re-enters its own ancestor is a cycle.
+
+`sch.sheet.name_or_page_collision` reports a sheet with no page number only when
+the root shows the design ever tracked pages at all. A hand-written or generated
+schematic has no `(sheet_instances ...)`, and reporting every sheet in one would
+be noise rather than a finding.
+
+### Selecting sheets
+
+The layout checks each take an optional `sheet` parameter naming which sheet to
+look at: a sheet name, a `Sheetfile` stem, or a KiCad instance path when one file
+is instantiated twice. `sheet="all"` and the default both mean every sheet.
+
+```python
+TextSymbolOverlapCheck(sheet="Power")  # one sheet
+TextSymbolOverlapCheck(sheet="all")  # the default
+```
+
+Omitting it covers the whole tree. A flat design *is* a one-sheet tree, so
+nothing changes for one, while a hierarchical design would otherwise be checked
+only on its root — which typically holds nothing but sheet symbols, and would
+report a clean bill of health. Findings from a non-root sheet are qualified with
+its name the same way a symbol's own text is, so `R3.Reference` reads as
+`Main.R3.Reference`. Root-sheet findings are unqualified, exactly as before.
+
+A selector that matches nothing is reported as a skip listing the valid names,
+never as a pass: a typo that quietly checked nothing would look identical to a
+clean design.
+
 ### Layout
 
-These read the sheet's own geometry rather than the netlist. Text boxes are
+These read each sheet's own geometry rather than the netlist. Text boxes are
 computed from a stroke font calibrated against a real KiCad renderer, so the
 verdicts match what you see in the viewer.
 

@@ -124,6 +124,17 @@ def value_of(node: list[SExpr] | None, index: int = 1, default: str = "") -> str
     return candidate if isinstance(candidate, str) else default
 
 
+def words_of(node: list[SExpr] | None) -> str:
+    """Every string atom after the head, space-joined, or ``""``.
+
+    For nodes whose arguments are a set of flags, like ``(justify left bottom)``,
+    where ``value_of`` would keep only the first.
+    """
+    if node is None:
+        return ""
+    return " ".join(atom for atom in node[1:] if isinstance(atom, str))
+
+
 def is_hidden(node: SExpr | None) -> bool:
     """Whether a node is flagged hidden, so KiCad draws nothing for it.
 

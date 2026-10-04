@@ -27,10 +27,12 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from kicad_evaltor.font_metrics import text_cell_bbox
-from kicad_evaltor.geometry import BBox, Placement
-from kicad_evaltor.schematic_file import FileField, FileSchematic
-from kicad_evaltor.sexpr import SExpr, child, children, head, is_hidden, value_of
+from kicad_evaltor.geometry import BBox, Placement, normalize_angle, rotate_point
+from kicad_evaltor.schematic_file import FileField, FileSchematic, font_style
+from kicad_evaltor.sexpr import SExpr, child, children, head, is_hidden, value_of, words_of
+from kicad_evaltor.text_placement import FIELD, Pen, field_parts
+from kicad_evaltor.text_placement import ink as placed_ink
+from kicad_evaltor.text_placement import outline as label_outline
 
 Point = tuple[float, float]
 
@@ -120,10 +122,14 @@ class SymbolGeometry:
 
 @dataclass(frozen=True)
 class TextItem:
-    """A run of text on the sheet, with the box KiCad reserves for it.
+    """A run of text on the sheet, boxed where KiCad draws it.
 
-    The box is the line cell, not the ink: it is what KiCad justifies, and text
-    that is merely close enough to touch is still unreadable.
+    The box is the drawn ink, stroke width included, as ``text_placement``
+    measures it from kicad-cli; for a global or hierarchical label it also takes
+    in the flag drawn around or beside the text. It is not the line cell KiCad
+    justifies by, which is taller than any letter and made text that only nearly
+    touched look like it overlapped. How close is too close to read is the
+    overlap checks' clearance, not padding hidden in the box.
 
     ``field`` names the property it was drawn from: a symbol field name such as
     ``Value``, or a free-standing kind such as ``label``.
@@ -135,6 +141,17 @@ class TextItem:
     size: float
     owner: str | None = None
     field: str = ""
+    # The separately drawn pieces the box encloses: the letters, and a label's
+    # flag. A label whose text is centred over its flag leaves empty corners in
+    # the enclosing box, so overlaps are measured piece by piece.
+    parts: tuple[BBox, ...] = ()
+    # Where the item is anchored on the sheet, which for a label is the point it
+    # connects at.
+    anchor: Point | None = None
+
+    @property
+    def pieces(self) -> tuple[BBox, ...]:
+        return self.parts or (self.bbox,)
 
     @property
     def label(self) -> str:
@@ -439,6 +456,43 @@ def _lookup_geometry(
     return SymbolGeometry(bboxes=tuple(boxes), pins=tuple(pins))
 
 
+def _turned(box: BBox, angle: float) -> list[Point]:
+    """The corners of ``box`` turned counter-clockwise on screen by ``angle``."""
+    return [
+        rotate_point(x, y, -angle) for x in (box.min_x, box.max_x) for y in (box.min_y, box.max_y)
+    ]
+
+
+def _field_corners(
+    content: str,
+    size: float,
+    pen: Pen,
+    halign: str,
+    valign: str,
+    angle: float,
+    symbol: Placement | None,
+) -> tuple[list[Point], float]:
+    """Where a symbol field's ink lands, and the angle its letters are drawn at.
+
+    KiCad turns the field's justified box with the field's own angle and the
+    symbol's rotation and mirror, but draws the letters at the field's angle
+    alone, swapped between flat and vertical when the symbol stands on its side.
+    A mirror moves the box and never the letters, and a field at 180 degrees is
+    drawn upside down. The two parts come from ``field_parts``.
+    """
+    draw = normalize_angle(angle)
+    if symbol is not None and round(normalize_angle(symbol.rotation)) % 180 == 90:
+        draw = 90.0 if round(draw) % 180 == 0 else 0.0
+    box = field_parts(content, size, pen, halign, valign, angle)
+    letters = field_parts(content, size, pen, halign, valign, draw)
+    centre = rotate_point(*box.centre, -angle)
+    if symbol is not None:
+        centre = symbol.orient(*centre)
+    offset = rotate_point(*letters.offset, -draw)
+    x0, y0 = centre[0] + offset[0], centre[1] + offset[1]
+    return [(x0 + x, y0 + y) for x, y in _turned(letters.extent, draw)], draw % 180.0
+
+
 def _text_item(
     content: str,
     size: float,
@@ -447,16 +501,45 @@ def _text_item(
     valign: str,
     owner: str | None,
     name: str,
+    angle: float = 0.0,
+    symbol: Placement | None = None,
+    kind: str = FIELD,
+    shape: str | None = None,
+    thickness: float = 0.0,
+    bold: bool = False,
 ) -> TextItem | None:
+    """A run of text, boxed where KiCad draws it.
+
+    Sheet text and labels are laid out reading left to right around the anchor,
+    with their outline if they have one, and turned counter-clockwise on screen
+    by ``angle``. A symbol field also follows its symbol; see ``_field_corners``.
+    """
     if not content:
         return None
+    pen = Pen.for_font(size, thickness, bold)
+    if kind == FIELD:
+        corners, rotation = _field_corners(content, size, pen, halign, valign, angle, symbol)
+        pieces = [corners]
+    else:
+        drawn = placed_ink(content, size, pen, kind, shape, angle, halign, valign)
+        pieces = [_turned(drawn, angle)]
+        flag = label_outline(kind, shape, content, size, pen, halign)
+        if flag is not None:
+            pieces.append(_turned(flag, angle))
+        rotation = normalize_angle(angle) % 180.0
+    parts = tuple(BBox.from_points((at[0] + x, at[1] + y) for x, y in piece) for piece in pieces)
+
+    union = BBox.union_all(parts)
+    assert union is not None
     return TextItem(
         content=content,
-        bbox=text_cell_bbox(content, size, at, halign, valign),
-        rotation=0.0,
+        bbox=union,
+        rotation=round(rotation, 9),
         size=size,
         owner=owner,
         field=name,
+        parts=parts if len(parts) > 1 else (),
+        anchor=at,
     )
 
 
@@ -472,8 +555,10 @@ def _component_texts(symbol, owner: str) -> tuple[TextItem, ...]:
         if is_power and field_node.name == "Value":
             continue
         halign, valign = _justify(field_node)
-        # KiCad renders symbol field text horizontally, at the absolute sheet
-        # position the field stores, whatever angle the field or the symbol says.
+        # The field's position is stored on the sheet, but its angle and
+        # justification are the ones it has before the symbol is turned. KiCad
+        # lays it out at its own angle, then applies the symbol's rotation and
+        # mirror, so a vertical field on a symbol at 90 degrees reads flat.
         item = _text_item(
             field_node.value,
             field_node.size,
@@ -482,6 +567,10 @@ def _component_texts(symbol, owner: str) -> tuple[TextItem, ...]:
             valign,
             owner,
             field_node.name,
+            angle=field_node.rotation,
+            symbol=symbol.at,
+            thickness=field_node.thickness,
+            bold=field_node.bold,
         )
         if item is not None:
             texts.append(item)
@@ -577,17 +666,32 @@ def extract(schematic: FileSchematic) -> SchematicScene:
             if is_hidden(node):
                 continue
             effects = child(node, "effects")
-            font = child(effects, "font") if effects else None
-            size_values = _numbers(child(font, "size")) if font else []
-            size = size_values[0] if size_values else 1.27
-            justify = value_of(child(effects, "justify")) if effects else ""
+            font = font_style(effects)
+            justify = words_of(child(effects, "justify")) if effects else ""
             angles = _numbers(child(node, "at"))
             at = (angles[0] if angles else 0.0, angles[1] if len(angles) > 1 else 0.0)
+            # A label's angle only says whether it runs across or up the sheet:
+            # which way it extends from the anchor comes from its justification,
+            # so 180 draws the same as 0 and 270 the same as 90.
+            angle = (angles[2] if len(angles) > 2 else 0.0) % 180.0
             words = justify.split()
             halign = "left" if "left" in words else "right" if "right" in words else "center"
             valign = "top" if "top" in words else "bottom" if "bottom" in words else "center"
             content = value_of(node, 1) if kind == "text" else value_of(node)
-            item = _text_item(content, size, at, halign, valign, None, kind)
+            item = _text_item(
+                content,
+                font.size,
+                at,
+                halign,
+                valign,
+                None,
+                kind,
+                angle=angle,
+                kind=kind,
+                shape=value_of(child(node, "shape")) or None,
+                thickness=font.thickness,
+                bold=font.bold,
+            )
             if item is not None:
                 scene.texts.append(item)
 

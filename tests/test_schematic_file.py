@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from kicad_evaltor.hierarchy import tree_for
 from kicad_evaltor.schematic_file import (
     FileSchematic,
     NetlistUnavailable,
@@ -183,21 +184,35 @@ class TestFileSchematicSymbols:
         with pytest.raises(ValueError, match="Not a KiCad schematic"):
             FileSchematic(path)
 
-    def test_accepts_the_real_demo_schematic(self):
+    def test_the_demo_root_holds_only_sheets(self):
         schematic = FileSchematic(DEMO_SCHEMATIC)
-        symbols = schematic.get_symbols()
 
-        assert len(symbols) == 34
-        by_ref = {s.reference: s for s in symbols}
+        assert schematic.get_symbols() == []
+        assert [s.name for s in schematic.sheets()] == ["Power", "Main", "Shared"]
+
+    def test_the_demo_symbols_are_reachable_through_the_tree(self):
+        tree = tree_for(FileSchematic(DEMO_SCHEMATIC))
+        by_ref = {s.reference: s for _sheet, s in tree.iter_symbols()}
+
+        assert len(by_ref) == 34
         assert by_ref["U1"].lib_id == "MCU_Microchip_ATmega:ATmega328P-M"
         assert by_ref["R1"].value == "10k"
         assert by_ref["R2"].value == "4k7"
 
+    def test_each_symbol_reports_the_sheet_it_belongs_to(self):
+        tree = tree_for(FileSchematic(DEMO_SCHEMATIC))
+        sheet_of = {s.reference: s.sheet for _sheet, s in tree.iter_symbols()}
+
+        assert sheet_of["U1"] == "Main"
+        assert sheet_of["J1"] == "Shared"
+        assert sheet_of["#PWR019"] == "Power"
+
     def test_demo_power_symbols_use_the_power_prefix(self):
-        symbols = FileSchematic(DEMO_SCHEMATIC).get_symbols()
-        power = [s for s in symbols if s.lib_id.startswith("power:")]
+        tree = tree_for(FileSchematic(DEMO_SCHEMATIC))
+        power = [s for _sheet, s in tree.iter_symbols() if s.lib_id.startswith("power:")]
 
         assert len(power) == 19
+        assert {s.sheet for s in power} == {"Power"}
 
 
 class TestFileSchematicNetlist:

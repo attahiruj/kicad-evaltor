@@ -14,8 +14,9 @@ assumed:
   clockwise in a y-down frame, so the applied rotation is ``-angle``
 * a pin's ``at`` is its connection point and the pin runs from there toward the
   body along its own angle
-* ``(mirror x)`` and ``(mirror y)`` are applied to the library-local point, before
-  the frame conversion and the rotation
+* ``(mirror x)`` and ``(mirror y)`` are applied on the sheet, after the rotation:
+  ``x`` flips sheet ``y`` and ``y`` flips sheet ``x``. At 0 and 180 degrees the
+  order makes no difference; at 90 and 270 it decides which way the body faces
 """
 
 from __future__ import annotations
@@ -61,9 +62,9 @@ def rotate_point(x: float, y: float, angle: float) -> Point:
 class Placement:
     """Where a symbol sits, and how its library-local axes reach the sheet.
 
-    ``mirror`` follows the schematic file's spelling: ``"x"`` reflects the
-    library-local geometry about its x axis, ``"y"`` about its y axis, both
-    before the frame conversion and the rotation.
+    ``mirror`` follows the schematic file's spelling: ``"x"`` reflects about the
+    sheet's horizontal axis through the anchor, ``"y"`` about its vertical axis,
+    both after the rotation.
     """
 
     x: float
@@ -87,13 +88,24 @@ class Placement:
         The same mirror, frame conversion and rotation ``apply`` does, without the
         translation, for the cases where only the heading matters.
         """
-        if self.mirror == "x":
-            dy = -dy
-        elif self.mirror == "y":
-            dx = -dx
         # Library y grows upwards and the file's angle is counter-clockwise on
         # screen, so the heading is flipped before a negated rotation is applied.
-        return rotate_point(dx, -dy, -self.rotation)
+        sx, sy = rotate_point(dx, -dy, -self.rotation)
+        if self.mirror == "x":
+            sy = -sy
+        elif self.mirror == "y":
+            sx = -sx
+        return (sx, sy)
+
+    def orient(self, dx: float, dy: float) -> Point:
+        """Turn a sheet-frame offset the way the symbol is turned.
+
+        The offset is given as it would be drawn at rotation 0 with no mirror,
+        so in sheet axes rather than library ones. This is how a symbol carries
+        its field text along: KiCad lays the field out flat, then applies the
+        symbol's rotation and mirror to the result.
+        """
+        return self.apply_direction(dx, -dy)
 
     def apply_box(self, box: BBox) -> BBox:
         """Map a library-local box, which must be axis-aligned, into sheet coordinates.

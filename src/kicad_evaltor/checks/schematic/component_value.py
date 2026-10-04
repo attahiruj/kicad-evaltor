@@ -36,7 +36,7 @@ class ComponentValueCheck(Check[ComponentValueParams]):
             return CheckResult.skip(self.id, "No schematic available")
 
         params = self.params
-        symbols = ctx.schematic.get_symbols()
+        symbols = ctx.sheet_symbols()
         # `validate` already rejected a missing expectation, but it cannot
         # narrow the type for a reader, so do it once here.
         expected = params.expected

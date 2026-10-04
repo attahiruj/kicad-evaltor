@@ -124,12 +124,13 @@ class TestAdvanceAndBoxWidth:
 
 
 class TestJustification:
-    def test_left_and_right_both_pin_the_cell_left_edge(self):
+    def test_left_pins_the_cell_left_edge_and_right_its_right_edge(self):
         left = text_cell_bbox("Mg", SIZE, (10.0, 20.0), "left", "bottom")
         right = text_cell_bbox("Mg", SIZE, (10.0, 20.0), "right", "bottom")
 
         assert left.min_x == pytest.approx(10.0)
-        assert right.min_x == pytest.approx(10.0)
+        assert right.max_x == pytest.approx(10.0)
+        assert right.width == pytest.approx(left.width)
 
     def test_bottom_pins_the_cell_bottom_on_the_anchor(self):
         cell = text_cell_bbox("M", SIZE, (10.0, 20.0), "left", "bottom")

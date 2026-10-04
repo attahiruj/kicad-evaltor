@@ -35,7 +35,7 @@ class ComponentExistsCheck(Check[ComponentExistsParams]):
             return CheckResult.skip(self.id, "No schematic available")
 
         params = self.params
-        symbols = ctx.schematic.get_symbols()
+        symbols = ctx.sheet_symbols()
 
         matches = []
         for sym in symbols:

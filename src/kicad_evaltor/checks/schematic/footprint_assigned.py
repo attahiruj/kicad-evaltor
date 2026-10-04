@@ -30,7 +30,7 @@ class FootprintAssignedCheck(Check[FootprintAssignedParams]):
             return CheckResult.skip(self.id, "No schematic available")
 
         params = self.params
-        symbols = ctx.schematic.get_symbols()
+        symbols = ctx.sheet_symbols()
 
         if params.reference:
             symbols = [s for s in symbols if s.reference == params.reference]

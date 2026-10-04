@@ -51,7 +51,7 @@ where = ["src"]
 include = ["kicad_evaltor*"]
 
 [tool.setuptools.package-data]
-kicad_evaltor = ["py.typed", "_stroke_font_data.json"]
+kicad_evaltor = ["py.typed", "_stroke_font_data.json", "_text_placement_data.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -14,6 +14,12 @@ from kicad_evaltor.checks.schematic.overlaps import (
     TextTextOverlapCheck,
     TextWireOverlapCheck,
 )
+from kicad_evaltor.checks.schematic.sheets import (
+    SheetCycleCheck,
+    SheetFileMissingCheck,
+    SheetNameOrPageCollisionCheck,
+    SheetPinMismatchCheck,
+)
 from kicad_evaltor.checks.schematic.symbol_in_library import SymbolInLibraryCheck
 
 __all__ = [
@@ -25,6 +31,10 @@ __all__ = [
     "ERCRunCheck",
     "FootprintAssignedCheck",
     "NoConnectFloatingCheck",
+    "SheetCycleCheck",
+    "SheetFileMissingCheck",
+    "SheetNameOrPageCollisionCheck",
+    "SheetPinMismatchCheck",
     "SymbolInLibraryCheck",
     "SymbolSymbolOverlapCheck",
     "SymbolWireOverlapCheck",
