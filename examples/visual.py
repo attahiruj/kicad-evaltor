@@ -2,14 +2,14 @@
 """Report what the layout checks find on a sheet.
 
 Runs the ``sch.layout.*`` and ``sch.noconnect.*`` checks against
-``examples/demo_circuit/visual_test.kicad_sch``, or against any other sheet
+``examples/demo_circuit/visual.kicad_sch``, or against any other sheet
 named on the command line, and lists each finding with where it sits. The checks
 read the sheet's geometry straight from the file, so no KiCad is needed.
 
 Usage:
 
-    python examples/visual_test.py [sheet.kicad_sch]     human report
-    python examples/visual_test.py --json                failures as JSON
+    python examples/visual.py [sheet.kicad_sch]     human report
+    python examples/visual.py --json                failures as JSON
 
 Findings are what this sheet is for, so the exit code is 0 whenever the script
 itself ran.
@@ -34,7 +34,7 @@ from kicad_evaltor.schematic_file import FileSchematic
 from kicad_evaltor.schematic_items import extract
 from kicad_evaltor.sexpr import child, value_of
 
-DEMO_SHEET = Path(__file__).resolve().parent / "demo_circuit" / "visual_test.kicad_sch"
+DEMO_SHEET = Path(__file__).resolve().parent / "demo_circuit" / "visual.kicad_sch"
 
 LAYOUT_PREFIXES = ("sch.layout.", "sch.noconnect.")
 

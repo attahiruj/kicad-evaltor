@@ -338,6 +338,19 @@ class TestFootprintAssignedCheck:
         assert result.is_fail
         assert result.details["missing"] == ["C1", "U1"]
 
+    def test_power_symbols_need_no_footprint(self):
+        ctx = ctx_with(
+            [
+                FakeSymbol("R1", footprint="R_0805"),
+                FakeSymbol("#PWR01", lib_id="power:GND"),
+                FakeSymbol("#FLG01", lib_id="power:PWR_FLAG"),
+            ]
+        )
+        result = run(FootprintAssignedCheck(), ctx)
+
+        assert result.is_pass
+        assert result.details["checked"] == 1
+
     def test_whitespace_only_footprint_counts_as_missing(self):
         ctx = ctx_with([FakeSymbol("R1", footprint="   ")])
         result = run(FootprintAssignedCheck(), ctx)

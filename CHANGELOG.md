@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The demo files drop their `_test` suffix, so every demo script carries the
+  name of the sheet it runs: `examples/simple_circuit.py` runs
+  `demo_circuit/simple_circuit.kicad_sch`, `examples/visual.py` runs
+  `demo_circuit/visual.kicad_sch`, and the new `examples/hierarchy.py` runs
+  `demo_circuit/hierarchy/hierarchy.kicad_sch`. KiCad's netlist and ERC for the
+  renamed sheets are unchanged.
+
 ### Fixed
 
 - Hidden text and labels are no longer treated as drawn geometry. KiCad records

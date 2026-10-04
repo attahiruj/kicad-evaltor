@@ -4,7 +4,7 @@ from kicad_evaltor.checks.base import CheckCategory, TestStatus as Status
 from kicad_evaltor.checks.registry import CheckRegistry
 from kicad_evaltor.checks.schematic.overlaps import OverlapParams
 from kicad_evaltor.core.context import DesignContext
-from conftest import demo_schematic_path
+from conftest import demo_schematic_path, hierarchy_schematic_path, sheet_symbol
 
 
 TEXT_TEXT = "sch.layout.text_text_overlap"
@@ -42,6 +42,22 @@ def run(check_id, **params):
     return CheckRegistry.create(check_id, **params).run(_CTX())
 
 
+_hierarchy_ctx = None
+
+
+def run_tree(check_id, **params):
+    """Run one check against the hierarchical demo, cached like ``run``."""
+    global _hierarchy_ctx
+    if _hierarchy_ctx is None:
+        _hierarchy_ctx = DesignContext(schematic_path=hierarchy_schematic_path())
+    return CheckRegistry.create(check_id, **params).run(_hierarchy_ctx)
+
+
+def count_tree(check_id, **params):
+    """Findings on the hierarchical demo, counting a pass as zero."""
+    return run_tree(check_id, **params).details.get("count", 0)
+
+
 class TestRegistration:
     @pytest.mark.parametrize("check_id", ALL)
     def test_check_is_registered(self, check_id):
@@ -56,143 +72,143 @@ class TestRegistration:
 
 
 class TestDemoSheetResults:
-    """The demo design's known layout defects, pinned so changes are deliberate.
+    """The flat demo's layout, pinned so changes are deliberate.
 
-    The demo is a hierarchy now, so the parts live on ``Main`` rather than on the
-    root. An assertion about the design as a whole therefore runs with
-    ``sheet="all"``, and the default's root-only view is asserted alongside it: a
-    check that silently stopped looking at the parts would otherwise still pass
-    everything below.
+    It is drawn tidily, and with every box measured where KiCad draws it, no
+    layout check finds anything on it.
     """
-
-    def test_the_default_looks_at_every_sheet(self):
-        # The root draws only sheet symbols, so a root-only default would check
-        # nothing and pass. The default has to reach the sheets holding the parts.
-        result = run(SYMBOL_SYMBOL)
-        assert result.status is Status.PASS
-        # 34 is the design's whole symbol count, unchanged by the split: the parts
-        # moved into Main and Power, and the default still reaches them.
-        assert result.details["checked"] == 34
 
     def test_rotated_parts_do_not_fake_an_overlap(self):
         # SW1 is placed at 270 degrees and C4 at 90, with their fields stored at
         # 90. The symbol's turn cancels the field's, so KiCad draws both flat and
         # neither part's reference collides with its value.
-        result = run(TEXT_TEXT, sheet="all")
+        result = run(TEXT_TEXT)
         assert result.status is Status.PASS
         assert result.details.get("overlaps", []) == []
-
-    def test_the_hierarchical_labels_the_split_added_do_not_collide(self):
-        # Every power symbol became a hierarchical label at the point its pin used
-        # to be, and several of those points sit beside a part's own fields.
-        result = run(TEXT_TEXT, sheet="all")
-        assert result.status is Status.PASS
-        assert result.details["checked"] == 72
 
     def test_hidden_power_symbol_values_are_not_checked(self):
         # GND and +3.3V sit on top of U2 in the file, but a power symbol's name
         # is drawn by its own artwork rather than as a text field, so it is not
         # text that can collide with the IC.
-        result = run(TEXT_SYMBOL, sheet="Power")
+        result = run(TEXT_SYMBOL)
         assert result.status is Status.PASS
         assert result.details.get("overlaps", []) == []
 
-    def test_the_labels_replacing_power_symbols_do_reach_their_parts(self):
-        # Every power symbol became a hierarchical label at the point its pin used
-        # to be, and that point is beside the part it fed -- so, unlike the power
-        # symbol it replaced, the label is text that can be reported against one.
-        # Same class as a label on its own wire, and for the same reason: KiCad
-        # draws the net either way, so nothing is actually hidden.
-        # R1's label is not among them: KiCad draws its text from 1.3mm past R1's
-        # pin, which the line cell centred on the anchor used to reach back over.
-        result = run(TEXT_SYMBOL, sheet="Main")
-        assert result.status is Status.FAIL
-        assert {o["second"] for o in result.details["overlaps"]} == {
-            "Main.C4",
-            "Main.C5",
-        }
-
-    def test_opt_in_wire_check_only_finds_masked_labels(self):
-        # Kept out of the demo suite because every finding is a label sitting on
-        # the wire it labels, which KiCad masks. This pins that expectation so
-        # nobody mistakes the output for a defect list.
-        result = run(TEXT_WIRE, sheet="Main")
-        assert result.status is Status.FAIL
-        # All of them are the hierarchical labels the split put where the power
-        # symbols were, whose flags sit on the wire end they connect to. SDA and
-        # SCL are plain net labels, which KiCad draws lifted clear of the wire.
-        assert result.details["count"] == 17
-        labels = {o["first"] for o in result.details["overlaps"]}
-        assert labels == {"Main.+3.3V", "Main.GND"}
-        assert all(o["second_kind"] == "wire" for o in result.details["overlaps"])
-
-    def test_a_finding_from_another_sheet_names_its_sheet(self):
-        result = run(TEXT_WIRE, sheet="all")
-        sheets = {o["first"].split(".", 1)[0] for o in result.details["overlaps"]}
-
-        assert sheets == {"Main", "Power"}
-        assert result.details["count"] == 38
-
-    def test_the_sheet_qualifier_stays_off_the_items_own_properties(self):
-        # The prefix says which sheet a finding came from. The properties are the
-        # item's own values, and prefixing them would report a reference that does
-        # not exist on the sheet.
-        result = run(TEXT_WIRE, sheet="Main")
-        for finding in result.details["overlaps"]:
-            _, _, name = finding["first"].partition(".")
-            assert finding["first_properties"] in (
-                {"label": name},
-                {"hierarchical_label": name},
-            )
+    def test_net_labels_sit_clear_of_the_wires_they_name(self):
+        # KiCad lifts a net label's text off its wire, so SDA and SCL, which the
+        # line cell around their anchors used to drag onto the wire, touch none.
+        result = run(TEXT_WIRE)
+        assert result.status is Status.PASS
 
     def test_no_two_symbol_bodies_share_space(self):
-        result = run(SYMBOL_SYMBOL, sheet="all")
+        result = run(SYMBOL_SYMBOL)
         assert result.status is Status.PASS
         assert result.details["checked"] == 34
 
     def test_everything_fits_on_the_sheet(self):
-        result = run(TEXT_OFF_SHEET, sheet="all")
+        result = run(TEXT_OFF_SHEET)
         assert result.status is Status.PASS
         assert result.details["sheet"] == [297.0, 210.0]
-        # Each sheet reads its own paper size, and this design uses A4 throughout.
+        # 34 fields and labels, and no power symbol values: those are artwork.
+        assert result.details["checked"] == 34
+
+
+class TestHierarchyDemoResults:
+    """The hierarchical demo: findings from both sheets, each named for its sheet.
+
+    Items on the root are named as they are; items on ``shared`` carry the
+    ``shared.`` prefix, so one report can hold both without ambiguity.
+    """
+
+    def test_the_default_looks_at_every_sheet(self):
+        # 29 symbols on the root and 48 with a body on shared: a root-only
+        # default would check the first number alone.
+        assert run_tree(SYMBOL_SYMBOL).details["checked"] == 77
+
+    def test_no_text_crosses_a_symbol(self):
+        # The LEDs' references sit beside their light arrows and CC2 sits between
+        # two of J2's pins. Each is clear of every drawn piece; only the box
+        # around a whole symbol, with its empty corners, would reach them.
+        result = run_tree(TEXT_SYMBOL)
+        assert result.status is Status.PASS
+        # 112 runs of text and 78 symbols.
+        assert result.details["checked"] == 190
+
+    def test_a_finding_names_the_sheet_it_came_from(self):
+        result = run_tree(TEXT_WIRE)
+        sheets = {o["first"].split(".", 1)[0] for o in result.details["overlaps"]}
+        assert sheets == {"shared"}
+
+    def test_the_sheet_qualifier_stays_off_the_items_own_properties(self):
+        # The prefix says which sheet a finding came from. The properties are the
+        # item's own values, and prefixing them would report a name that does not
+        # exist on the sheet.
+        result = run_tree(TEXT_WIRE)
+        for finding in result.details["overlaps"]:
+            _, _, name = finding["first"].partition(".")
+            assert finding["first_properties"] == {"hierarchical_label": name}
+
+    def test_opt_in_wire_check_only_finds_labels_on_their_own_wires(self):
+        # Kept out of the demo suite because every finding is a hierarchical
+        # label's flag on the wire it connects, which is what the flag is for.
+        result = run_tree(TEXT_WIRE)
+        assert result.status is Status.FAIL
+        assert result.details["count"] == 17
+        assert all(o["first"].startswith("shared.") for o in result.details["overlaps"])
+        assert all(o["second_kind"] == "wire" for o in result.details["overlaps"])
+
+    def test_text_never_meets_text(self):
+        result = run_tree(TEXT_TEXT)
+        assert result.status is Status.PASS
+        assert result.details["checked"] == 112
+
+    def test_each_sheet_reads_its_own_paper(self):
+        result = run_tree(TEXT_OFF_SHEET)
+        assert result.status is Status.PASS
         assert result.details["sheets"] == [
-            {"sheet": "simple_circuit_test", "size": [297.0, 210.0]},
-            {"sheet": "Power", "size": [297.0, 210.0]},
-            {"sheet": "Main", "size": [297.0, 210.0]},
-            {"sheet": "Shared", "size": [297.0, 210.0]},
+            {"sheet": "hierarchy", "size": [297.0, 210.0]},
+            {"sheet": "shared", "size": [297.0, 210.0]},
         ]
-        # 34 fields plus no power symbol values: those are artwork, not text.
-        assert result.details["checked"] == 72
+
+    def test_flags_on_sheet_pins_and_pins_on_pins_are_kept_promises(self):
+        # Six flags close unused pins of the shared sheet block, and four power
+        # symbols sit straight on a part's pin with no wire between. KiCad's ERC
+        # is clean, and so is this.
+        result = run_tree(NO_CONNECT)
+        assert result.status is Status.PASS
+        assert result.details["flags"] == 14
 
 
 class TestSheetSelection:
     """The ``sheet`` parameter: what a check looks at, and how it says so."""
 
     def test_a_single_sheet_can_be_named(self):
-        result = run(SYMBOL_SYMBOL, sheet="Power")
-        assert result.details["checked"] == 19
+        assert run_tree(SYMBOL_SYMBOL, sheet="shared").details["checked"] == 48
+
+    def test_the_root_can_be_named(self):
+        assert run_tree(SYMBOL_SYMBOL, sheet="hierarchy").details["checked"] == 29
 
     def test_a_sheet_can_be_named_by_its_linked_file_stem(self):
-        assert run(SYMBOL_SYMBOL, sheet="power").details["checked"] == 19
+        assert run_tree(SYMBOL_SYMBOL, sheet="circuit").details["checked"] == 48
 
     def test_the_name_is_matched_without_regard_to_case(self):
-        assert run(SYMBOL_SYMBOL, sheet="ALL").details["checked"] == 34
+        assert run_tree(SYMBOL_SYMBOL, sheet="ALL").details["checked"] == 77
 
     def test_an_unknown_sheet_skips_and_names_the_ones_that_would_work(self):
-        result = run(SYMBOL_SYMBOL, sheet="Nonesuch")
+        result = run_tree(SYMBOL_SYMBOL, sheet="Nonesuch")
 
         assert result.status is Status.SKIP
         assert "Nonesuch" in result.message
-        assert {"Power", "Main", "Shared"} <= set(result.details["sheets"])
+        assert result.details["sheets"] == ["hierarchy", "shared"]
 
     def test_ignore_matches_the_unprefixed_label_on_every_sheet(self):
-        # Sheet-qualified ignore entries are out of scope, so "GND" has to keep
-        # working when the finding it drops is labelled "Main.GND".
-        everything = run(TEXT_WIRE, sheet="Main")
-        dropped = [o for o in everything.details["overlaps"] if o["first"] == "Main.GND"]
+        # Sheet-qualified ignore entries are out of scope, so "VDD_IN" has to keep
+        # working when the finding it drops is labelled "shared.VDD_IN".
+        everything = run_tree(TEXT_WIRE)
+        dropped = [o for o in everything.details["overlaps"] if o["first"] == "shared.VDD_IN"]
 
         assert dropped
-        kept = run(TEXT_WIRE, sheet="Main", ignore=["GND"])
+        kept = run_tree(TEXT_WIRE, ignore=["VDD_IN"])
         assert kept.details["count"] == everything.details["count"] - len(dropped)
 
 
@@ -319,6 +335,24 @@ class TestNoConnectFlags:
         label = """(label "N1" (at 97.46 101.27 0) (effects (font (size 1.27 1.27))))"""
         result = self._run(ctx(label))
         assert result.details["unmarked_pins"] == ["T1.2"]
+
+    def test_a_pin_ending_on_another_pin_is_connected(self, ctx):
+        # A second part placed so its pin lands on T1's: KiCad joins the two
+        # with no wire, the way a power symbol sits on a capacitor.
+        other = """(symbol (lib_id "Test:Tagged") (at 105.08 100 0)
+    (property "Reference" "T2" (at 105.08 90))
+  )"""
+        result = self._run(ctx(other))
+        assert "T1.2" not in result.details["unmarked_pins"]
+        assert "T2.1" not in result.details["unmarked_pins"]
+
+    def test_a_flag_on_a_sheet_pin_marks_it(self, ctx):
+        # An unused pin on a sheet block is closed with a flag like any other.
+        # ``sheet_symbol`` puts the first pin at (58.8, 50.8).
+        block = sheet_symbol("Child", "child.kicad_sch", uuid="sheet-1", pins=["SPARE"])
+        both = "(no_connect (at 97.46 101.27)) (no_connect (at 102.54 101.27))"
+        result = self._run(ctx(block + both + "(no_connect (at 58.8 50.8))"))
+        assert result.details.get("floating_flags", []) == []
 
     def test_a_label_counts_by_its_anchor_not_its_letters(self, ctx):
         # KiCad draws a net label's text clear of the point it connects at, so a
@@ -493,34 +527,37 @@ class TestOwnSymbolText:
 
 class TestFindingsCarryProperties:
     def test_text_findings_report_the_property_they_were_drawn_from(self):
-        result = run(TEXT_WIRE, sheet="Main")
+        result = run_tree(TEXT_WIRE)
         for finding in result.details["overlaps"]:
             assert finding["first_kind"] == "text"
             assert len(finding["first_properties"]) == 1
 
     def test_a_wire_shows_nothing_so_it_reports_no_properties(self):
-        result = run(TEXT_WIRE, sheet="Main")
+        result = run_tree(TEXT_WIRE)
         for finding in result.details["overlaps"]:
             assert finding["second_kind"] == "wire"
             assert finding["second_properties"] == {}
 
     def test_symbol_findings_report_the_parts_properties(self):
-        # A wide margin forces a finding on the tidy demo sheet, so the payload
-        # can be inspected without editing the design.
-        result = run(SYMBOL_SYMBOL, sheet="Main", margin=40.0)
+        # A wide margin forces a finding between symbols, so the payload can be
+        # inspected without editing the design.
+        result = run_tree(SYMBOL_SYMBOL, sheet="shared", margin=40.0)
         assert result.status is Status.FAIL
         for finding in result.details["overlaps"]:
             assert finding["first_kind"] == finding["second_kind"] == "symbol"
             for side in ("first", "second"):
                 properties = finding[f"{side}_properties"]
-                assert properties
-                # A power symbol's reference is hidden, so not every part draws one.
-                assert properties.get("Reference") in (None, finding[side].partition(".")[2])
+                reference = finding[side].partition(".")[2]
+                # A power symbol hides its reference, and often its value too, so
+                # it can draw no property at all. A part always draws some.
+                if not reference.startswith("#"):
+                    assert properties
+                assert properties.get("Reference") in (None, reference)
 
     def test_the_whole_failure_payload_is_json_serialisable(self):
         import json
 
-        result = run(TEXT_WIRE, sheet="Main")
+        result = run_tree(TEXT_WIRE)
         assert json.loads(json.dumps(result.details))["overlaps"] == result.details["overlaps"]
 
 
@@ -529,28 +566,26 @@ class TestParamsAffectResults:
         assert run(TEXT_TEXT, margin=1.0).details["margin"] == 1.0
 
     def test_a_large_margin_catches_more(self):
-        assert count(TEXT_TEXT, margin=1.0, sheet="Main") > count(
-            TEXT_TEXT, margin=0.0, sheet="Main"
-        )
+        assert count_tree(TEXT_TEXT, margin=1.0) > count_tree(TEXT_TEXT, margin=0.0)
 
     def test_ignore_drops_a_named_item(self):
-        everything = run(TEXT_WIRE, sheet="Main")
-        dropped = [o for o in everything.details["overlaps"] if o["first"] == "Main.GND"]
-        assert dropped, "the demo sheet should report GND against a wire"
-        assert count(TEXT_WIRE, sheet="Main", ignore=["GND"]) == (
+        everything = run_tree(TEXT_WIRE)
+        dropped = [o for o in everything.details["overlaps"] if o["first"] == "shared.+3.7V_IN"]
+        assert dropped, "the demo should report +3.7V_IN against a wire"
+        assert count_tree(TEXT_WIRE, ignore=["+3.7V_IN"]) == (
             everything.details["count"] - len(dropped)
         )
 
     def test_negative_margin_sheds_noise_rather_than_adding_it(self):
-        assert count(TEXT_WIRE, margin=-0.2, sheet="Main") < count(TEXT_WIRE, sheet="Main")
+        assert count_tree(TEXT_WIRE, margin=-0.2) < count_tree(TEXT_WIRE)
 
     def test_positive_margin_is_the_other_direction(self):
-        assert count(TEXT_WIRE, margin=0.5, sheet="Main") > count(TEXT_WIRE, sheet="Main")
+        assert count_tree(TEXT_WIRE, margin=0.5) > count_tree(TEXT_WIRE)
 
     def test_a_margin_that_would_flatten_everything_does_not_crash(self):
         # Thin boxes invert under a large negative margin; the engine drops them
         # rather than aborting the check.
-        assert count(TEXT_WIRE, margin=-5.0, sheet="Main") == 0
+        assert count_tree(TEXT_WIRE, margin=-5.0) == 0
 
     def test_margin_must_be_a_number(self):
         with pytest.raises(TypeError, match="margin"):

@@ -27,6 +27,7 @@ bearings put it.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -113,9 +114,77 @@ def line_height(size: float) -> float:
     return float(_data()["line_height_em"]) * size
 
 
+# KiCad stores characters that would break a net name or a quoted string as
+# ``{name}`` escapes and draws the character itself. Read back from kicad-cli: a
+# name not in this table is drawn literally, braces and all.
+_ESCAPES = {
+    "dblquote": '"',
+    "quote": "'",
+    "lt": "<",
+    "gt": ">",
+    "backslash": "\\",
+    "slash": "/",
+    "bar": "|",
+    "colon": ":",
+    "comma": ",",
+    "space": " ",
+    "dollar": "$",
+    "tab": "\t",
+    "return": "\n",
+    "brace": "{",
+}
+_ESCAPE = re.compile(r"\{(" + "|".join(_ESCAPES) + r")\}")
+
+
+def unescape(text: str) -> str:
+    """The text KiCad draws for a string as the file stores it."""
+    return _ESCAPE.sub(lambda m: _ESCAPES[m.group(1)], text)
+
+
+# Formatting markup, measured from kicad-cli in em at two sizes: ``_{...}`` and
+# ``^{...}`` draw at four fifths of the size, dropped or raised from the
+# baseline, and ``~{...}`` draws a bar a fixed height above the capitals that
+# runs from just after where the run starts to just before where it ends.
+_SCRIPT_SCALE = 0.8
+_SUBSCRIPT_DROP_EM = 0.1105
+_SUPERSCRIPT_RISE_EM = 0.2895
+_OVERBAR_EM = 1.2775
+_OVERBAR_START_EM = 0.1395
+_OVERBAR_END_EM = 0.0609
+_MARKUP = {"_": "sub", "^": "super", "~": "overbar"}
+
+
+def _runs(content: str) -> list[tuple[str, str]]:
+    """Split one line into ``(text, style)`` runs; style is ``""`` for plain."""
+    runs: list[tuple[str, str]] = []
+    plain: list[str] = []
+    i = 0
+    while i < len(content):
+        style = _MARKUP.get(content[i])
+        close = content.find("}", i + 2) if style and content[i + 1 : i + 2] == "{" else -1
+        if style and close != -1:
+            if plain:
+                runs.append(("".join(plain), ""))
+                plain = []
+            runs.append((content[i + 2 : close], style))
+            i = close + 1
+            continue
+        plain.append(content[i])
+        i += 1
+    if plain:
+        runs.append(("".join(plain), ""))
+    return runs
+
+
+def _scale(style: str) -> float:
+    return _SCRIPT_SCALE if style in ("sub", "super") else 1.0
+
+
 def advance_width(content: str, size: float) -> float:
-    """Total pen advance across the string, in millimetres."""
-    return sum(glyph(c).advance for c in content) * size
+    """Total pen advance across one line of drawn text, in millimetres."""
+    return (
+        sum(_scale(style) * glyph(c).advance for text, style in _runs(content) for c in text) * size
+    )
 
 
 def text_box_width(content: str, size: float) -> float:
@@ -144,16 +213,30 @@ def text_extents(content: str, size: float) -> tuple[float, float, float, float]
 
     Vertical values are relative to the **baseline** with y increasing upward,
     and horizontal values to the pen origin. A string with no ink at all, such
-    as spaces, still reports its box.
+    as spaces, still reports its box. ``content`` is one line of drawn text,
+    formatting markup included; see ``unescape`` for the file's escapes.
     """
     shift = descent_em()
     pen = 0.0
     ink: list[tuple[float, float, float, float]] = []
-    for char in content:
-        g = glyph(char)
-        if g.has_ink:
-            ink.append((pen + g.x0, g.y_top - shift, pen + g.x1, g.y_bottom - shift))
-        pen += g.advance
+    for text, style in _runs(content):
+        scale = _scale(style)
+        raise_by = {"sub": -_SUBSCRIPT_DROP_EM, "super": _SUPERSCRIPT_RISE_EM}.get(style, 0.0)
+        start = pen
+        for char in text:
+            g = glyph(char)
+            if g.has_ink:
+                ink.append(
+                    (
+                        pen + scale * g.x0,
+                        scale * (g.y_top - shift) + raise_by,
+                        pen + scale * g.x1,
+                        scale * (g.y_bottom - shift) + raise_by,
+                    )
+                )
+            pen += scale * g.advance
+        if style == "overbar" and text:
+            ink.append((start + _OVERBAR_START_EM, _OVERBAR_EM, pen - _OVERBAR_END_EM, _OVERBAR_EM))
 
     if not ink:
         return (0.0, 0.0, advance_width(content, size), 0.0)

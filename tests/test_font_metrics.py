@@ -18,6 +18,7 @@ from kicad_evaltor.font_metrics import (
     text_bbox,
     text_box_width,
     text_cell_bbox,
+    unescape,
     text_extents,
 )
 
@@ -263,4 +264,44 @@ class TestAgainstMeasuredProbe:
         # under, against "M" alone at 0.285 em.
         assert text_bbox("Mg", SIZE).max_y - text_bbox("M", SIZE).max_y == pytest.approx(
             0.333346 * SIZE, abs=1e-3
+        )
+
+
+class TestEscapes:
+    def test_a_slash_in_a_net_name_is_drawn_as_a_slash(self):
+        assert unescape("PB9{slash}PC14") == "PB9/PC14"
+
+    def test_every_escape_kicad_writes_is_undone(self):
+        assert unescape("{dblquote}{lt}{gt}{backslash}{colon}{comma}{brace}") == '"<>\\:,{'
+
+    def test_an_unknown_name_is_drawn_literally(self):
+        assert unescape("A{nope}B") == "A{nope}B"
+
+
+class TestMarkup:
+    """Read back from kicad-cli: scripts at four fifths, an overbar above the caps."""
+
+    def test_a_subscript_advances_four_fifths_as_far(self):
+        plain = advance_width("M", SIZE)
+        assert advance_width("M_{M}", SIZE) == pytest.approx(plain * 1.8)
+
+    def test_a_subscript_drops_below_the_baseline(self):
+        _, _, _, bottom = text_extents("_{M}", SIZE)
+        assert bottom == pytest.approx(-0.1105 * SIZE)
+
+    def test_a_superscript_rises_above_the_capitals(self):
+        _, top, _, _ = text_extents("^{M}", SIZE)
+        assert top == pytest.approx((0.8 + 0.2895) * SIZE)
+
+    def test_an_overbar_sits_above_the_capitals_and_spans_the_run(self):
+        x0, top, x1, _ = text_extents("~{RESET}", SIZE)
+        assert top == pytest.approx(1.2775 * SIZE)
+        assert x1 - x0 > text_extents("RESET", SIZE)[2] - text_extents("RESET", SIZE)[0]
+
+    def test_markup_braces_take_no_room(self):
+        assert advance_width("~{AB}", SIZE) == pytest.approx(advance_width("AB", SIZE))
+
+    def test_an_unclosed_brace_is_drawn_as_written(self):
+        assert advance_width("~{AB", SIZE) == pytest.approx(
+            sum(glyph(c).advance for c in "~{AB") * SIZE
         )

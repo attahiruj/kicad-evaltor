@@ -41,6 +41,9 @@ class FootprintAssignedCheck(Check[FootprintAssignedParams]):
                     reference=params.reference,
                 )
 
+        # A power symbol names a net, not a part: it is never placed on the board,
+        # so KiCad gives it no footprint and there is none to forget.
+        symbols = [s for s in symbols if not str(getattr(s, "lib_id", "")).startswith("power:")]
         missing = []
         for sym in symbols:
             footprint = getattr(sym, "footprint", None)

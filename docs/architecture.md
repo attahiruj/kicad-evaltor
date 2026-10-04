@@ -145,6 +145,12 @@ rendering judgements are applied, and where hidden items are dropped: anything
 marked `(hide yes)` is skipped, and a power symbol's `Value` is skipped because
 KiCad draws that name in the symbol's artwork rather than as a field.
 
+A symbol keeps the box of each graphic it is drawn from, as `body_parts`, beside
+the box around its whole body. The overlap checks measure those pieces and each
+pin line, never the enclosing box: a symbol is mostly empty space, and an LED's
+arrows or a connector's spread of pins would otherwise make text placed in that
+space look as if it touched the drawing.
+
 Hidden is not one spelling. KiCad puts the flag beside a symbol field and a
 symbol pin, but inside the `(effects ...)` block for everything built on a
 TEXT_EFFECTS block — `text`, the three label kinds, a sheet pin. `sexpr.is_hidden`

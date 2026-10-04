@@ -163,17 +163,35 @@ class NoConnectFloatingCheck(Check[NoConnectParams]):
         """
         scene = target.scene
         pins = [pin for comp in scene.components for pin in comp.pin_connections]
+        # A sheet block's pins take a flag too: an unused one is closed off the
+        # same way an unused symbol pin is.
+        sheet_pins = [(pin.x, pin.y) for sheet in target.schematic.sheets() for pin in sheet.pins]
+        targets = [pin.at for pin in pins] + sheet_pins
         floating = [
             [flag[0], flag[1]]
             for flag in scene.no_connects
-            if not any(math.dist(flag, pin.at) <= _TOLERANCE for pin in pins)
+            if not any(math.dist(flag, point) <= _TOLERANCE for point in targets)
         ]
         unmarked = [
             f"{target.prefix}{pin.label}"
             for pin in pins
-            if not pin.hidden and pin.label not in ignore and not _marked(scene, pin)
+            if not pin.hidden
+            and pin.label not in ignore
+            and not _marked(scene, pin)
+            and not _touches_another_pin(pin, pins)
         ]
         return floating, unmarked
+
+
+def _touches_another_pin(pin: PinConnection, pins: list[PinConnection]) -> bool:
+    """True when another pin ends on this one: KiCad connects them with no wire.
+
+    A power symbol placed straight onto a capacitor's pin is the usual case.
+    """
+    return any(
+        other is not pin and not other.hidden and math.dist(pin.at, other.at) <= _TOLERANCE
+        for other in pins
+    )
 
 
 def _drawn_pins(scene: SchematicScene) -> int:

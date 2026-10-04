@@ -236,6 +236,10 @@ class Component:
 
     ``properties`` holds its drawn properties, user-defined ones included. Hidden
     ones are left out: they are not drawn.
+
+    ``body_bbox`` encloses the whole body, and ``body_parts`` boxes each graphic
+    it is drawn from: an LED's triangle, its bar and each of its arrows. A symbol
+    is mostly empty space between those, so the overlap checks measure the parts.
     """
 
     reference: str
@@ -247,6 +251,14 @@ class Component:
     is_power: bool = False
     properties: Mapping[str, str] = field(default_factory=dict)
     pin_connections: tuple[PinConnection, ...] = ()
+    body_parts: tuple[BBox, ...] = ()
+
+    @property
+    def body_pieces(self) -> tuple[BBox, ...]:
+        """Each separately drawn piece of the body, or the whole body if unknown."""
+        if self.body_parts:
+            return self.body_parts
+        return (self.body_bbox,) if self.body_bbox is not None else ()
 
     @property
     def value(self) -> str:
@@ -426,7 +438,8 @@ def _lookup_geometry(
 ) -> SymbolGeometry | None:
     """Find the sub-symbols that make up one placed instance.
 
-    Unit 0 graphics are shared by every instance, so they are always included
+    Sub-symbols are named ``<name>_<unit>_<style>``. Unit 0 graphics are shared
+    by every unit and style 0 graphics by every body style, so both are included
     alongside the graphics for the requested unit and body style.
     """
     definition = lib_symbols.get(lib_id)
@@ -444,7 +457,10 @@ def _lookup_geometry(
             sub_unit_i, sub_style_i = int(sub_unit), int(sub_style)
         except ValueError:
             continue
-        if sub_unit_i != 0 and (sub_unit_i, sub_style_i) != (unit, body_style):
+        # 0 in either place means "every": a unit-0 sub-symbol is drawn for every
+        # unit, and a style-0 one for every body style. Libraries put a unit's
+        # pins in its ``_1_0`` sub-symbol as often as in ``_1_1``.
+        if sub_unit_i not in (0, unit) or sub_style_i not in (0, body_style):
             continue
         # A sub-symbol's own offset shifts everything inside it, which is how a
         # library symbol stacks two bodies or moves a graphic off its origin.
@@ -594,12 +610,14 @@ def extract(schematic: FileSchematic) -> SchematicScene:
     for symbol in schematic.get_symbols():
         geometry = _lookup_geometry(lib_symbols, symbol.lib_id, symbol.unit, symbol.body_style)
         body: BBox | None = None
+        body_parts: tuple[BBox, ...] = ()
         pin_boxes: list[BBox] = []
         connections: list[PinConnection] = []
         if geometry is not None:
             local = BBox.union_all(geometry.bboxes) if geometry.bboxes else None
             if local is not None:
                 body = symbol.at.apply_box(local)
+                body_parts = tuple(symbol.at.apply_box(box) for box in geometry.bboxes)
             for pin in geometry.pins:
                 local_start, local_end = pin.segment()
                 start = symbol.at.apply(*local_start)
@@ -632,6 +650,7 @@ def extract(schematic: FileSchematic) -> SchematicScene:
             lib_id=symbol.lib_id,
             at=symbol.at,
             body_bbox=body,
+            body_parts=body_parts,
             pin_bboxes=tuple(pin_boxes),
             pin_connections=tuple(connections),
             texts=_component_texts(symbol, symbol.reference),

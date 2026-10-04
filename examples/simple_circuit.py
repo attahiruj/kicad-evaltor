@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run kicad-evaltor checks against a schematic that is meant to pass.
 
-The demo in ``examples/demo_circuit/simple_circuit_test.kicad_sch`` is an
+The demo in ``examples/demo_circuit/simple_circuit.kicad_sch`` is an
 ATmega328P + MPU-6050 IMU breakout. It is the same design the test suite uses,
 so every expectation below was read back from the design itself rather than
 guessed:
@@ -20,13 +20,14 @@ guessed:
 U1 and U2 share four nets: /SDA, /SCL, +3.3V and GND.
 
 Worth knowing about this particular file: it is a schematic that was never
-finished. Only 5 of its 34 symbols carry a Footprint property, and ``Y1`` among
-them, so ``FootprintAssignedCheck`` is run with ``allow_none=True`` here. Run it
-without that flag to see the real list of 31.
+finished. Only 3 of its 15 parts carry a Footprint property (``U1``, ``U2`` and
+``J1``), so ``FootprintAssignedCheck`` is run with ``allow_none=True`` here. Run it
+without that flag to see the other 12. Power symbols are not counted: they name a
+net rather than a part and never carry one.
 
 Its layout is untidy but not overlapping, and the layout checks agree. ``SW1``
-is placed at 270 degrees and ``C4`` at 90, with their fields stored at a
-compensating angle; KiCad draws field text flat regardless, so neither part's
+is placed at 270 degrees and ``C4`` at 90, with their fields stored at 90; the
+symbol's turn cancels the field's, so KiCad draws both flat and neither part's
 reference collides with its value. ``Y1``'s reference sits inside the crystal
 body, which is allowed: a small symbol is mostly empty space, and only text
 crossing the outline is a defect. ``J1``'s value is moved below its connector
@@ -47,7 +48,7 @@ open carries a no-connect flag.
 
 Usage:
 
-    python examples/simple_circuit_test.py
+    python examples/simple_circuit.py
 
 Exit code is 0 when the only failure is the deliberate one, so this doubles
 as a smoke test.
@@ -80,7 +81,7 @@ from kicad_evaltor import (
     TextTextOverlapCheck,
 )
 
-DEMO_SCHEMATIC = Path(__file__).resolve().parent / "demo_circuit" / "simple_circuit_test.kicad_sch"
+DEMO_SCHEMATIC = Path(__file__).resolve().parent / "demo_circuit" / "simple_circuit.kicad_sch"
 
 
 def find_kicad_cli() -> str | None:

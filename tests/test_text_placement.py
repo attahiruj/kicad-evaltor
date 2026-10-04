@@ -3,9 +3,11 @@
 import pytest
 
 from kicad_evaltor.font_metrics import text_bbox, text_extents
+from kicad_evaltor.geometry import BBox
 from kicad_evaltor.text_placement import (
     DEFAULT_PEN,
     FIELD,
+    LINE_PITCH_EM,
     LABEL_SHAPES,
     Pen,
     field_parts,
@@ -114,6 +116,42 @@ class TestOutline:
         short = outline("hierarchical_label", "input", "A", SIZE, pen)
         long = outline("hierarchical_label", "input", "AAAAAAAA", SIZE, pen)
         assert short == long
+
+
+class TestLines:
+    """Multi-line text, as kicad-cli lays it out."""
+
+    @staticmethod
+    def _ink(content: str, v: str) -> BBox:
+        return ink(content, SIZE, Pen.for_font(SIZE), "text", None, 0, "left", v)
+
+    def test_lines_are_a_fixed_pitch_apart(self):
+        one = self._ink("M", "top")
+        two = self._ink("M\nM", "top")
+        assert two.max_y - one.max_y == pytest.approx(LINE_PITCH_EM * SIZE)
+
+    def test_top_keeps_the_first_line_where_a_single_line_sits(self):
+        assert self._ink("M\nM", "top").min_y == pytest.approx(self._ink("M", "top").min_y)
+
+    def test_bottom_keeps_the_last_line_where_a_single_line_sits(self):
+        assert self._ink("M\nM", "bottom").max_y == pytest.approx(self._ink("M", "bottom").max_y)
+
+    def test_one_trailing_newline_adds_no_line(self):
+        assert self._ink("M\n", "bottom") == self._ink("M", "bottom")
+
+    def test_a_second_trailing_newline_does(self):
+        drop = self._ink("M", "bottom").max_y - self._ink("M\n\n", "bottom").max_y
+        assert drop == pytest.approx(LINE_PITCH_EM * SIZE)
+
+    def test_the_widest_line_sets_the_width(self):
+        widest = self._ink("MMMM", "top").width
+        assert self._ink("M\nMMMM", "top").width == pytest.approx(widest, abs=0.001)
+
+    def test_escapes_are_drawn_as_their_characters(self):
+        pen = Pen.for_font(SIZE)
+        escaped = ink("A{slash}B", SIZE, pen, "label", None, 0, "left", "bottom")
+        plain = ink("A/B", SIZE, pen, "label", None, 0, "left", "bottom")
+        assert escaped == plain
 
 
 def test_the_table_records_the_kicad_it_came_from():

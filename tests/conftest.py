@@ -78,9 +78,9 @@ def kicad_cli_supports(subcommand: str, cli: Path) -> bool:
 
 
 # The sheet the suite's expectations are written against. A second demo sheet,
-# visual_test.kicad_sch, lives in the same folder, so this one is picked by name
+# visual.kicad_sch, lives in the same folder, so this one is picked by name
 # rather than by whichever file happens to sort first.
-DEMO_SCHEMATIC_STEM = "simple_circuit_test"
+DEMO_SCHEMATIC_STEM = "simple_circuit"
 
 
 def demo_schematic_path() -> Path:
@@ -104,6 +104,30 @@ def demo_schematic_path() -> Path:
 @pytest.fixture(scope="session")
 def demo_schematic() -> Path:
     return demo_schematic_path()
+
+
+def hierarchy_schematic_path() -> Path:
+    """The root of the bundled hierarchical demo.
+
+    ``hierarchy.kicad_sch`` draws the controls and holds one sheet, ``shared``,
+    linking to ``circuit.kicad_sch`` with the power stage and MCU. The flat demo
+    covers the design checks; this one is what the sheet tree is tested against.
+    """
+    path = (
+        Path(__file__).resolve().parent.parent
+        / "examples"
+        / "demo_circuit"
+        / "hierarchy"
+        / "hierarchy.kicad_sch"
+    )
+    if not path.exists():
+        raise FileNotFoundError(f"no hierarchical demo at {path}")
+    return path
+
+
+@pytest.fixture(scope="session")
+def hierarchy_schematic() -> Path:
+    return hierarchy_schematic_path()
 
 
 @pytest.fixture(scope="session")

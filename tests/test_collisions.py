@@ -158,6 +158,27 @@ class TestGroups:
         assert colliding_pairs([text, flag, corner]) == []
 
 
+class TestKeep:
+    def test_a_rejected_meeting_does_not_hide_a_kept_one(self):
+        # Two pieces of one symbol meet the same text. The first is inside a
+        # piece and harmless; the second crosses one. Only the second counts, and
+        # it must still be found although the pair was already seen.
+        symbol = object()
+        inside = CollisionItem("symbol", "R1", BBox(0, 0, 10, 10), group=symbol)
+        crossing = CollisionItem("symbol", "R1", BBox(4, 4, 4.5, 20), group=symbol)
+        text = item("R1.Value", 3, 3, 6, 6)
+
+        def crosses(collision):
+            return not collision.second.bbox.contains(collision.first.bbox) and not (
+                collision.first.bbox.contains(collision.second.bbox)
+                and collision.first.label == "R1"
+            )
+
+        found = colliding_pairs([inside, crossing, text], keep=crosses)
+        assert len(found) == 1
+        assert crossing in (found[0].first, found[0].second)
+
+
 class TestPairEnumeration:
     def test_every_unordered_pair_is_reported_once(self):
         items = [item("a", 0, 0, 10, 10), item("b", 1, 1, 11, 11), item("c", 2, 2, 12, 12)]

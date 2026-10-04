@@ -62,34 +62,39 @@ with DesignContext(project_path="myproject.kicad_pro", headless=True) as ctx:
 ```
 
 A complete, runnable example lives in
-[`examples/simple_circuit_test.py`](examples/simple_circuit_test.py), which runs
+[`examples/simple_circuit.py`](examples/simple_circuit.py), which runs
 the schematic checks against
-[`examples/demo_circuit/simple_circuit_test.kicad_sch`](examples/demo_circuit/simple_circuit_test.kicad_sch).
-That demo is deliberately hierarchical — a root holding only sheet blocks, plus
-`Main`, `Power`, and a `Shared` sheet reached through `../demo_shared/` — so the
-tree is exercised for real rather than described in prose. Splitting a schematic
-does not change its netlist: exporting the root gives the same 46 nets and 15 BOM
-components as the flat file did, with identical net names.
-
+[`examples/demo_circuit/simple_circuit.kicad_sch`](examples/demo_circuit/simple_circuit.kicad_sch).
 It exits non-zero if the design stops matching its documented expectations, so it
 doubles as a smoke test:
 
 ```bash
-python examples/simple_circuit_test.py
+python examples/simple_circuit.py
 ```
 
-[`examples/visual_test.py`](examples/visual_test.py) does the same for the
+[`examples/hierarchy.py`](examples/hierarchy.py) does the same for a hierarchical
+design, [`examples/demo_circuit/hierarchy/`](examples/demo_circuit/hierarchy/): a
+root sheet with the buttons and status LED, and a `shared` sheet below it holding
+the power stage and MCU. Its checks find parts on either sheet by reference, follow
+nets across the sheet block's pins, and name each layout finding's sheet. KiCad
+agrees on the design: 41 parts across `/` and `/shared/`, and a clean ERC.
+
+```bash
+python examples/hierarchy.py
+```
+
+[`examples/visual.py`](examples/visual.py) does the same for the
 layout checks, against
-[`examples/demo_circuit/visual_test.kicad_sch`](examples/demo_circuit/visual_test.kicad_sch).
+[`examples/demo_circuit/visual.kicad_sch`](examples/demo_circuit/visual.kicad_sch).
 It runs every `sch.layout.*` and `sch.noconnect.*` check the registry knows and
 lists each finding with the properties and coordinates involved. It is a report,
 not a test: it exits 0 even when the checks find defects. It needs no KiCad at
 all, and takes any sheet as an argument:
 
 ```bash
-python examples/visual_test.py                                 # human report
-python examples/visual_test.py --json                          # the same failures as JSON
-python examples/visual_test.py path/to/your.kicad_sch          # any other sheet
+python examples/visual.py                                 # human report
+python examples/visual.py --json                          # the same failures as JSON
+python examples/visual.py path/to/your.kicad_sch          # any other sheet
 ```
 
 ## Checks
@@ -146,7 +151,7 @@ look at: a sheet name, a `Sheetfile` stem, or a KiCad instance path when one fil
 is instantiated twice. `sheet="all"` and the default both mean every sheet.
 
 ```python
-TextSymbolOverlapCheck(sheet="Power")  # one sheet
+TextSymbolOverlapCheck(sheet="shared")  # one sheet
 TextSymbolOverlapCheck(sheet="all")  # the default
 ```
 
@@ -154,8 +159,9 @@ Omitting it covers the whole tree. A flat design *is* a one-sheet tree, so
 nothing changes for one, while a hierarchical design would otherwise be checked
 only on its root — which typically holds nothing but sheet symbols, and would
 report a clean bill of health. Findings from a non-root sheet are qualified with
-its name the same way a symbol's own text is, so `R3.Reference` reads as
-`Main.R3.Reference`. Root-sheet findings are unqualified, exactly as before.
+its name the same way a symbol's own text is, so `D1.Reference` on the
+hierarchical demo's `shared` sheet reads as `shared.D1.Reference`. Root-sheet
+findings are unqualified, exactly as before.
 
 A selector that matches nothing is reported as a skip listing the valid names,
 never as a pass: a typo that quietly checked nothing would look identical to a

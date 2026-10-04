@@ -13,7 +13,7 @@ requested clearance.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from kicad_evaltor.geometry import BBox
@@ -147,6 +147,7 @@ def colliding_pairs(
     margin: float = 0.0,
     clearance: float = 0.0,
     ignore_same_owner: bool = False,
+    keep: Callable[[Collision], bool] | None = None,
 ) -> list[Collision]:
     """Every pair that overlaps, or that sits closer than ``clearance``.
 
@@ -159,6 +160,10 @@ def colliding_pairs(
 
     ``ignore_same_owner`` drops pairs belonging to one component, so a symbol's
     own reference and value text are not reported against each other.
+
+    ``keep`` decides which collisions count before a pair of groups is marked as
+    reported, so a harmless meeting of two pieces cannot hide a real one between
+    two other pieces of the same things.
     """
     ordered = sorted(items, key=lambda item: item.bbox.min_x)
     # Each box is measured once with the margin on it, and once more, grown by
@@ -187,13 +192,16 @@ def colliding_pairs(
                 continue
             area = _overlap(box, other_box)
             if area is not None:
-                found.append(Collision(item, other, area))
-                reported.add(pair)
+                collision = Collision(item, other, area)
+            else:
+                gap = box.clearance(other_box)
+                if gap >= clearance:
+                    continue
+                collision = Collision(item, other, _touching(box, other_box), gap)
+            if keep is not None and not keep(collision):
                 continue
-            gap = box.clearance(other_box)
-            if gap < clearance:
-                found.append(Collision(item, other, _touching(box, other_box), gap))
-                reported.add(pair)
+            found.append(collision)
+            reported.add(pair)
     return found
 
 

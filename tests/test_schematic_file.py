@@ -15,9 +15,10 @@ from kicad_evaltor.schematic_file import (
     to_dict,
 )
 from kicad_evaltor.sexpr import child, children, head, is_hidden, parse, value_of
-from conftest import demo_schematic_path
+from conftest import demo_schematic_path, hierarchy_schematic_path
 
 DEMO_SCHEMATIC = demo_schematic_path()
+HIERARCHY_SCHEMATIC = hierarchy_schematic_path()
 
 MINIMAL = """(kicad_sch (version 20250114) (generator "evaltor")
   (lib_symbols
@@ -184,35 +185,65 @@ class TestFileSchematicSymbols:
         with pytest.raises(ValueError, match="Not a KiCad schematic"):
             FileSchematic(path)
 
-    def test_the_demo_root_holds_only_sheets(self):
-        schematic = FileSchematic(DEMO_SCHEMATIC)
+    def test_accepts_the_real_demo_schematic(self):
+        symbols = FileSchematic(DEMO_SCHEMATIC).get_symbols()
 
-        assert schematic.get_symbols() == []
-        assert [s.name for s in schematic.sheets()] == ["Power", "Main", "Shared"]
-
-    def test_the_demo_symbols_are_reachable_through_the_tree(self):
-        tree = tree_for(FileSchematic(DEMO_SCHEMATIC))
-        by_ref = {s.reference: s for _sheet, s in tree.iter_symbols()}
-
-        assert len(by_ref) == 34
+        assert len(symbols) == 34
+        by_ref = {s.reference: s for s in symbols}
         assert by_ref["U1"].lib_id == "MCU_Microchip_ATmega:ATmega328P-M"
         assert by_ref["R1"].value == "10k"
         assert by_ref["R2"].value == "4k7"
 
-    def test_each_symbol_reports_the_sheet_it_belongs_to(self):
-        tree = tree_for(FileSchematic(DEMO_SCHEMATIC))
-        sheet_of = {s.reference: s.sheet for _sheet, s in tree.iter_symbols()}
-
-        assert sheet_of["U1"] == "Main"
-        assert sheet_of["J1"] == "Shared"
-        assert sheet_of["#PWR019"] == "Power"
-
     def test_demo_power_symbols_use_the_power_prefix(self):
-        tree = tree_for(FileSchematic(DEMO_SCHEMATIC))
-        power = [s for _sheet, s in tree.iter_symbols() if s.lib_id.startswith("power:")]
+        symbols = FileSchematic(DEMO_SCHEMATIC).get_symbols()
+        power = [s for s in symbols if s.lib_id.startswith("power:")]
 
         assert len(power) == 19
-        assert {s.sheet for s in power} == {"Power"}
+
+    def test_a_flat_sheet_puts_every_symbol_on_the_root(self):
+        tree = tree_for(FileSchematic(DEMO_SCHEMATIC))
+
+        assert {s.sheet for _sheet, s in tree.iter_symbols()} == {None}
+
+
+class TestHierarchyDemoSymbols:
+    """The hierarchical demo: a root with the controls, one ``shared`` sheet below.
+
+    The totals are KiCad's own: ``kicad-cli sch export netlist`` lists the same 41
+    parts across the sheets ``/`` and ``/shared/``.
+    """
+
+    def test_the_root_holds_its_own_parts_and_one_sheet(self):
+        root = FileSchematic(HIERARCHY_SCHEMATIC)
+
+        assert len(root.get_symbols()) == 29
+        assert [(s.name, s.filename) for s in root.sheets()] == [("shared", "circuit.kicad_sch")]
+
+    def test_the_tree_reaches_the_child_sheets_symbols(self):
+        tree = tree_for(FileSchematic(HIERARCHY_SCHEMATIC))
+        symbols = [s for _sheet, s in tree.iter_symbols()]
+
+        assert len(symbols) == 78
+        parts = {s.reference for s in symbols if not s.lib_id.startswith("power:")}
+        assert len(parts) == 41
+        by_ref = {s.reference: s for s in symbols}
+        assert by_ref["U2"].lib_id == "MCU_ST_STM32G0:STM32G031F8Px"
+        assert by_ref["R3"].value == "180k"
+
+    def test_each_symbol_reports_the_sheet_it_belongs_to(self):
+        tree = tree_for(FileSchematic(HIERARCHY_SCHEMATIC))
+        sheet_of = {s.reference: s.sheet for _sheet, s in tree.iter_symbols()}
+
+        assert sheet_of["SW1"] is None
+        assert sheet_of["U2"] == "shared"
+        assert sheet_of["J2"] == "shared"
+
+    def test_power_symbols_sit_on_both_sheets(self):
+        tree = tree_for(FileSchematic(HIERARCHY_SCHEMATIC))
+        power = [s for _sheet, s in tree.iter_symbols() if s.lib_id.startswith("power:")]
+
+        assert len(power) == 37
+        assert {s.sheet for s in power} == {None, "shared"}
 
 
 class TestFileSchematicNetlist:

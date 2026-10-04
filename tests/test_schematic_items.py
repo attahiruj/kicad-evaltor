@@ -7,9 +7,10 @@ from kicad_evaltor.geometry import BBox, Placement
 from kicad_evaltor.hierarchy import tree_for
 from kicad_evaltor.schematic_file import FileSchematic, load_schematic
 from kicad_evaltor.schematic_items import DEFAULT_LINE_WIDTH, SchematicScene, TextItem, extract
-from conftest import demo_schematic_path
+from conftest import demo_schematic_path, hierarchy_schematic_path
 
 DEMO = demo_schematic_path()
+HIERARCHY = hierarchy_schematic_path()
 
 # A capacitor with the properties a real library part has: two standard ones,
 # two user-defined, and a hidden footprint.
@@ -39,23 +40,20 @@ def tree():
 
 @pytest.fixture(scope="module")
 def scenes(tree):
-    """Every sheet's geometry in the demo, by sheet name.
-
-    The demo is a hierarchy, and a sheet is its own coordinate space, so there is
-    no longer one scene for the design: the root draws only sheet blocks, ``Main``
-    holds the parts, ``Power`` the power symbols and ``Shared`` the connector.
-    """
+    """Every sheet's geometry in the demo, by sheet name: the flat demo has one."""
     return {sheet.name: tree.scene_for(sheet) for sheet in tree.sheets()}
 
 
 @pytest.fixture(scope="module")
-def scene(scenes):
-    """The ``Main`` sheet, where the demo keeps the parts these tests read.
+def scene(tree):
+    return tree.scene_for(tree.root_sheet)
 
-    The properties and geometry under test belong to the design, not to one sheet,
-    so the assertions are unchanged; only where the design now lives has moved.
-    """
-    return scenes["Main"]
+
+@pytest.fixture(scope="module")
+def hierarchy_scenes():
+    """The hierarchical demo's sheets: ``hierarchy`` at the root, ``shared`` below."""
+    tree = tree_for(FileSchematic(HIERARCHY))
+    return {sheet.name: tree.scene_for(sheet) for sheet in tree.sheets()}
 
 
 def _extract(tmp_path, body: str, name: str = "probe.kicad_sch"):
@@ -174,59 +172,99 @@ class TestPinGeometry:
 
 
 class TestWholeSheet:
-    def test_inventory_matches_the_demo_schematic(self, scenes):
-        assert {name: len(s.components) for name, s in scenes.items()} == {
-            "simple_circuit_test": 0,
-            "Power": 19,
-            "Main": 14,
-            "Shared": 1,
-        }
-        assert sum(len(s.components) for s in scenes.values()) == 34
-        assert sum(len(s.no_connects) for s in scenes.values()) == 37
-
-    def test_the_split_needs_no_wires_for_its_own_connectivity(self, scenes):
-        # The 58 wires the flat demo drew all survive, spread over Main and Shared.
-        # The 27 extra are the ones the hierarchy needs and the flat design did
-        # not: eight joining the sheet pins on the root, and one stub under each of
-        # the 19 power symbols so its hierarchical label has somewhere to sit.
-        assert {name: len(s.wires) for name, s in scenes.items()} == {
-            "simple_circuit_test": 8,
-            "Power": 19,
-            "Main": 54,
-            "Shared": 4,
-        }
-        assert len(scenes["Main"].wires) + len(scenes["Shared"].wires) == 58
-
-    def test_the_root_sheet_draws_only_the_sheet_links(self, scenes):
-        root = scenes["simple_circuit_test"]
-        assert root.components == []
-        assert root.standalone_texts == []
-        assert len(root.junctions) == 4
+    def test_inventory_matches_the_demo_schematic(self, scene):
+        assert len(scene.components) == 34
+        assert len(scene.wires) == 58
+        assert len(scene.junctions) == 10
+        assert len(scene.no_connects) == 37
 
     def test_texts_split_into_component_fields_and_labels(self, scene):
-        local = [t for t in scene.standalone_texts if t.field == "label"]
-        assert {t.content for t in local} == {"SDA", "SCL"}
-
-    def test_hierarchical_labels_are_standalone_texts_of_their_own(self, scenes):
-        # The net names the split had to add where a power symbol used to be. They
-        # are the only standalone text on Power, and 17 of the 19 sit on Main: the
-        # other two are J1's, which went to Shared with it.
-        assert {t.content for t in scenes["Power"].standalone_texts} == {"GND", "+3.3V"}
-        assert len(scenes["Power"].standalone_texts) == 19
-        assert (
-            len([t for t in scenes["Main"].standalone_texts if t.field == "hierarchical_label"])
-            == 17
-        )
-        assert {t.content for t in scenes["Shared"].standalone_texts} == {"GND", "+3.3V"}
+        assert len(scene.standalone_texts) == 4
+        assert {t.content for t in scene.standalone_texts} == {"SDA", "SCL"}
 
     def test_hidden_fields_are_not_extracted(self, scene):
         u1 = scene.component("U1")
         assert {t.field for t in u1.texts} == {"Reference", "Value"}
 
-    def test_power_symbols_are_flagged_and_carry_no_footprint(self, scenes):
-        power = scenes["Power"].power_components
+    def test_power_symbols_are_flagged_and_carry_no_footprint(self, scene):
+        power = scene.power_components
         assert len(power) == 19
         assert all(c.lib_id.startswith("power:") for c in power)
+
+
+class TestHierarchyDemoScenes:
+    """Each sheet of the hierarchical demo is its own scene, in its own coordinates."""
+
+    def test_each_sheet_has_its_own_inventory(self, hierarchy_scenes):
+        assert {name: len(s.components) for name, s in hierarchy_scenes.items()} == {
+            "hierarchy": 29,
+            "shared": 49,
+        }
+        assert {name: len(s.wires) for name, s in hierarchy_scenes.items()} == {
+            "hierarchy": 33,
+            "shared": 109,
+        }
+
+    def test_power_symbols_are_found_on_every_sheet(self, hierarchy_scenes):
+        assert {name: len(s.power_components) for name, s in hierarchy_scenes.items()} == {
+            "hierarchy": 16,
+            "shared": 21,
+        }
+
+    def test_the_child_exposes_its_nets_as_hierarchical_labels(self, hierarchy_scenes):
+        shared = hierarchy_scenes["shared"]
+        names = {t.content for t in shared.standalone_texts if t.field == "hierarchical_label"}
+        assert len(names) == 13
+        assert {"PA3", "VDD_IN", "PB9{slash}PC14"} <= names
+
+    def test_the_root_has_net_labels_and_no_hierarchical_ones(self, hierarchy_scenes):
+        root = hierarchy_scenes["hierarchy"]
+        kinds = {t.field for t in root.standalone_texts}
+        assert "hierarchical_label" not in kinds
+        assert {t.content for t in root.standalone_texts if t.field == "label"} == {
+            "BTN1",
+            "BTN2",
+            "BTN3",
+            "LED",
+        }
+
+    def test_an_escaped_label_is_measured_as_drawn(self, hierarchy_scenes):
+        # KiCad stores a "/" in a net name as {slash} and draws the slash, so the
+        # box is as wide as "PB9/PC14", not as the escape.
+        label = next(
+            t for t in hierarchy_scenes["shared"].standalone_texts if t.content == "PB9{slash}PC14"
+        )
+        drawn = label.pieces[0]
+        assert drawn.width == pytest.approx(
+            text_extents("PB9/PC14", label.size)[2]
+            - text_extents("PB9/PC14", label.size)[0]
+            + DEFAULT_LINE_WIDTH,
+            abs=0.001,
+        )
+
+    def test_a_body_is_kept_as_the_pieces_it_is_drawn_from(self, hierarchy_scenes):
+        # D3 is an LED: a triangle, a bar and its arrows. Its reference sits beside
+        # the triangle, inside the box around the whole body because the arrows
+        # widen it lower down, yet clear of every piece actually drawn.
+        d3 = hierarchy_scenes["hierarchy"].component("D3")
+        assert d3 is not None
+        assert len(d3.body_parts) > 1
+        reference = next(t for t in d3.texts if t.field == "Reference")
+        assert reference.bbox.intersects(d3.body_bbox)
+        assert not any(reference.bbox.intersects(piece) for piece in d3.body_parts)
+
+    def test_the_pieces_enclose_to_the_whole_body(self, hierarchy_scenes):
+        for sheet_scene in hierarchy_scenes.values():
+            for comp in sheet_scene.components:
+                if comp.body_parts:
+                    assert BBox.union_all(comp.body_parts) == comp.body_bbox, comp.reference
+
+    def test_a_pin_in_a_shared_body_style_is_recovered(self, hierarchy_scenes):
+        # The TP4056 library symbol keeps its pins in TP4056-42-ESOP8_1_0, the
+        # sub-symbol for every body style of unit 1.
+        u3 = hierarchy_scenes["shared"].component("U3")
+        assert u3 is not None
+        assert len(u3.pin_connections) == 9
 
 
 class TestComponents:

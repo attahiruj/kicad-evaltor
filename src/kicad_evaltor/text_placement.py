@@ -32,7 +32,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from kicad_evaltor.font_metrics import text_bbox, text_box_width
+from kicad_evaltor.font_metrics import text_bbox, text_box_width, unescape
 from kicad_evaltor.geometry import BBox, Point
 
 _DATA_FILE = Path(__file__).with_name("_text_placement_data.json")
@@ -51,6 +51,9 @@ MAX_PEN_EM = 0.25
 # The kinds of text the calibration covers. A field belongs to a symbol; the rest
 # stand on the sheet.
 FIELD = "field"
+# Baseline to baseline between the lines of multi-line text, measured from
+# kicad-cli at two sizes.
+LINE_PITCH_EM = 1.61
 # A field is also measured on a symbol mirrored each way; see ``field_parts``.
 MIRROR_X = "mirror_x"
 MIRROR_Y = "mirror_y"
@@ -151,6 +154,31 @@ def _draw(draw: float) -> int:
     return 90 if round(draw) % 180 == 90 else 0
 
 
+def _line_ink(
+    line: str,
+    size: float,
+    pen: Pen,
+    kind: str,
+    shape: str | None,
+    draw: float,
+    justify_h: str,
+    justify_v: str,
+) -> BBox:
+    model = text_bbox(line, size, None, justify_h, justify_v)
+    width = text_box_width(line, size)
+    dx, dy = _text_fits().get(
+        key(kind, _shape(kind, shape), _draw(draw), justify_h, justify_v), (_ZERO, _ZERO)
+    )
+    shift_x, shift_y = dx(size, pen, width), dy(size, pen, width)
+    half = pen.stroke / 2.0
+    return BBox(
+        model.min_x + shift_x - half,
+        model.min_y + shift_y - half,
+        model.max_x + shift_x + half,
+        model.max_y + shift_y + half,
+    )
+
+
 def ink(
     content: str,
     size: float,
@@ -163,23 +191,34 @@ def ink(
 ) -> BBox:
     """The drawn extent of a run of text in its own frame, stroke included.
 
+    ``content`` is the text as the file stores it: its ``{slash}``-style escapes
+    are undone here, and a newline starts another line. Each line is justified
+    on its own across the page; down the page the lines move as a block, with
+    ``top`` pinning the first line where a single line would sit, ``bottom`` the
+    last, and the default centring them.
+
     ``draw`` is the orientation it is drawn at, 0 or 90, which picks the
     correction: KiCad does not place vertical free text quite where it places
     horizontal text. The box itself is still returned reading left to right.
     """
-    model = text_bbox(content, size, None, justify_h, justify_v)
-    width = text_box_width(content, size)
-    dx, dy = _text_fits().get(
-        key(kind, _shape(kind, shape), _draw(draw), justify_h, justify_v), (_ZERO, _ZERO)
-    )
-    shift_x, shift_y = dx(size, pen, width), dy(size, pen, width)
-    half = pen.stroke / 2.0
-    return BBox(
-        model.min_x + shift_x - half,
-        model.min_y + shift_y - half,
-        model.max_x + shift_x + half,
-        model.max_y + shift_y + half,
-    )
+    lines = unescape(content).split("\n")
+    # One trailing newline ends the last line rather than opening another; a
+    # second one, and any blank line before it, does take up a line.
+    if len(lines) > 1 and lines[-1] == "":
+        lines.pop()
+    anchor_line = {"top": 0.0, "bottom": len(lines) - 1.0}.get(justify_v, (len(lines) - 1) / 2.0)
+    pitch = LINE_PITCH_EM * size
+    boxes = []
+    for index, line in enumerate(lines):
+        if not line.strip() and len(lines) > 1:
+            continue
+        box = _line_ink(line, size, pen, kind, shape, draw, justify_h, justify_v)
+        drop = (index - anchor_line) * pitch
+        boxes.append(BBox(box.min_x, box.min_y + drop, box.max_x, box.max_y + drop))
+    whole = BBox.union_all(boxes)
+    if whole is None:
+        return _line_ink("", size, pen, kind, shape, draw, justify_h, justify_v)
+    return whole
 
 
 def _centre(box: BBox) -> Point:

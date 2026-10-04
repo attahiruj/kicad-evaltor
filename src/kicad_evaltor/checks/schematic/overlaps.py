@@ -168,13 +168,16 @@ def _distinct(items: list[CollisionItem]) -> int:
 
 
 def _symbol_items(scene: SchematicScene, *, include_pins: bool) -> list[CollisionItem]:
-    items = []
+    """One item per drawn piece of each symbol: every body graphic, and every pin
+    line when ``include_pins``. A box around the whole symbol would reach into the
+    empty space between them, where nothing is drawn to collide with."""
+    items: list[CollisionItem] = []
     for comp in scene.components:
-        box = comp.bbox if include_pins else comp.body_bbox
-        if box is not None:
-            items.append(
-                CollisionItem("symbol", comp.reference, box, comp.reference, comp.properties)
-            )
+        pieces = comp.body_pieces + (comp.pin_bboxes if include_pins else ())
+        items.extend(
+            CollisionItem("symbol", comp.reference, piece, comp.reference, comp.properties, comp)
+            for piece in pieces
+        )
     return items
 
 
@@ -336,22 +339,39 @@ class TextSymbolOverlapCheck(_OverlapCheck):
             _drop_ignored(_symbol_items(scene, include_pins=True), ignore), target.prefix
         )
 
-        def against(symbols: list[CollisionItem]) -> list:
-            pairs = colliding_pairs(texts + symbols, margin=self.params.margin, clearance=clearance)
-            return _text_first(cross_kind(pairs, "text", "symbol"))
+        def text_and_symbol(collision) -> tuple[CollisionItem, CollisionItem] | None:
+            kinds = (collision.first.kind, collision.second.kind)
+            if kinds == ("text", "symbol"):
+                return collision.first, collision.second
+            if kinds == ("symbol", "text"):
+                return collision.second, collision.first
+            return None
 
-        def own(collision) -> bool:
-            return bool(collision.first.owner) and collision.first.owner == collision.second.owner
+        def own_straddle(collision) -> bool:
+            # Only the body counts against a symbol's own text, and only a piece
+            # the text crosses: text sitting wholly inside a piece, like a value
+            # inside a resistor's rectangle, is where KiCad puts it.
+            pair = text_and_symbol(collision)
+            if pair is None:
+                return False
+            text, piece = pair
+            return text.owner == piece.owner and not piece.bbox.contains(text.bbox)
 
-        def straddles(collision) -> bool:
-            return not collision.second.bbox.contains(collision.first.bbox)
+        def foreign(collision) -> bool:
+            pair = text_and_symbol(collision)
+            return pair is not None and pair[0].owner != pair[1].owner
 
-        collisions = [c for c in against(bodies) if own(c) and straddles(c)]
-        collisions += [c for c in against(pinned) if not own(c)]
+        def against(symbols: list[CollisionItem], keep) -> list:
+            pairs = colliding_pairs(
+                texts + symbols, margin=self.params.margin, clearance=clearance, keep=keep
+            )
+            return _text_first(pairs)
+
+        collisions = against(bodies, own_straddle) + against(pinned, foreign)
         return _Findings(
             summaries=[c.describe() for c in collisions],
             details=[c.as_dict() for c in collisions],
-            checked=_distinct(texts) + len(pinned),
+            checked=_distinct(texts) + _distinct(pinned),
         )
 
 
@@ -417,16 +437,29 @@ class SymbolWireOverlapCheck(Check[OverlapParams]):
         ignore = set(self.params.ignore)
         wires = [w for w in target.scene.wires if w.label not in ignore]
         bodies = [
-            (component, component.body_bbox)
+            component
             for component in target.scene.components
-            if component.body_bbox is not None and component.reference not in ignore
+            if component.body_pieces and component.reference not in ignore
         ]
 
+        # A wire is measured against each drawn piece of a body, not the box
+        # around all of them, and reported at most once per symbol.
         collisions = [
             collision
             for wire in wires
-            for component, body in bodies
-            if (collision := _buried_wire(wire, component, body, target.prefix)) is not None
+            for component in bodies
+            if (
+                collision := next(
+                    (
+                        found
+                        for piece in component.body_pieces
+                        if (found := _buried_wire(wire, component, piece, target.prefix))
+                        is not None
+                    ),
+                    None,
+                )
+            )
+            is not None
         ]
         return _Findings(
             summaries=[c.describe() for c in collisions],

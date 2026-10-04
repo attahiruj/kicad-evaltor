@@ -1987,7 +1987,7 @@
 			(uuid "7bbea8f2-7050-4144-b2b5-d8f988948f7c")
 		)
 		(instances
-			(project "visual_test"
+			(project "visual"
 				(path "/9baba254-92a0-4e39-873a-79da473a7854"
 					(reference "J2")
 					(unit 1)
@@ -2131,7 +2131,7 @@
 			(uuid "29d4380c-0269-4e9d-84b7-f184371f51a0")
 		)
 		(instances
-			(project "visual_test"
+			(project "visual"
 				(path "/9baba254-92a0-4e39-873a-79da473a7854"
 					(reference "U2")
 					(unit 1)
@@ -2209,7 +2209,7 @@
 			(uuid "89cea0be-af5a-47d0-9ce5-77e824ae829e")
 		)
 		(instances
-			(project "visual_test"
+			(project "visual"
 				(path "/9baba254-92a0-4e39-873a-79da473a7854"
 					(reference "SW1")
 					(unit 1)
@@ -2284,7 +2284,7 @@
 			(uuid "9f03b7c3-49f3-4f3c-bc60-bc67f6cd8b24")
 		)
 		(instances
-			(project "visual_test"
+			(project "visual"
 				(path "/9baba254-92a0-4e39-873a-79da473a7854"
 					(reference "#PWR01")
 					(unit 1)
@@ -2362,7 +2362,7 @@
 			(uuid "438a619e-ac33-4dbb-b740-575662796deb")
 		)
 		(instances
-			(project "visual_test"
+			(project "visual"
 				(path "/9baba254-92a0-4e39-873a-79da473a7854"
 					(reference "SW2")
 					(unit 1)
@@ -2440,7 +2440,7 @@
 			(uuid "8dd6ff40-613d-4d37-ba4e-d6258465b7ec")
 		)
 		(instances
-			(project "visual_test"
+			(project "visual"
 				(path "/9baba254-92a0-4e39-873a-79da473a7854"
 					(reference "R1")
 					(unit 1)
@@ -2515,7 +2515,7 @@
 			(uuid "beb09711-5abb-4ba0-a077-462de44fde43")
 		)
 		(instances
-			(project "visual_test"
+			(project "visual"
 				(path "/9baba254-92a0-4e39-873a-79da473a7854"
 					(reference "#PWR02")
 					(unit 1)
@@ -2594,7 +2594,7 @@
 			(uuid "de912457-4d29-4cdd-84fd-5cd6f23a5f48")
 		)
 		(instances
-			(project "visual_test"
+			(project "visual"
 				(path "/9baba254-92a0-4e39-873a-79da473a7854"
 					(reference "J1")
 					(unit 1)
@@ -2669,7 +2669,7 @@
 			(uuid "18cf1970-2d65-49cf-a0ac-e810f581b5d8")
 		)
 		(instances
-			(project "visual_test"
+			(project "visual"
 				(path "/9baba254-92a0-4e39-873a-79da473a7854"
 					(reference "#PWR016")
 					(unit 1)
@@ -2744,7 +2744,7 @@
 			(uuid "2f718536-3a8b-4403-98ce-f0031c2e191e")
 		)
 		(instances
-			(project "visual_test"
+			(project "visual"
 				(path "/9baba254-92a0-4e39-873a-79da473a7854"
 					(reference "PWR011")
 					(unit 1)
@@ -2819,7 +2819,7 @@
 			(uuid "fa44dd94-6e90-40ab-a262-e2625d839afc")
 		)
 		(instances
-			(project "visual_test"
+			(project "visual"
 				(path "/9baba254-92a0-4e39-873a-79da473a7854"
 					(reference "PWR012")
 					(unit 1)
