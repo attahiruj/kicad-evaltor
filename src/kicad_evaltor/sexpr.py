@@ -1,14 +1,26 @@
-"""A minimal reader for KiCad's s-expression file format.
+"""A minimal reader and writer for KiCad's s-expression file format.
 
-Only what the schematic reader needs: nested lists of atoms, with quoted-string
-escapes honoured. Deliberately dependency-free and forgiving: a malformed tail
-yields whatever parsed cleanly rather than raising, because a partially readable
-schematic is more useful to a validator than none.
+Nested lists of atoms, with quoted-string escapes honoured. Deliberately
+dependency-free and forgiving: a malformed tail yields whatever parsed cleanly
+rather than raising, because a partially readable schematic is more useful to a
+validator than none.
+
+A quoted atom comes back as :class:`Quoted`, a ``str`` subclass, so code that
+reads values sees plain strings while :func:`dumps` can still write ``"10k"``
+and ``yes`` the way they were written. KiCad cares: a name that loses its quotes
+can be read back as a keyword.
 """
 
 from __future__ import annotations
 
 SExpr = str | list["SExpr"]
+
+
+class Quoted(str):
+    """A string atom that was quoted in the file and is quoted when written."""
+
+    __slots__ = ()
+
 
 _ESCAPES = {"n": "\n", "r": "\r", "t": "\t", '"': '"', "\\": "\\"}
 
@@ -66,7 +78,7 @@ def parse(text: str) -> SExpr | None:
     return None
 
 
-def _read_quoted(text: str, start: int) -> tuple[str, int]:
+def _read_quoted(text: str, start: int) -> tuple[Quoted, int]:
     out: list[str] = []
     index = start + 1
     length = len(text)
@@ -81,11 +93,11 @@ def _read_quoted(text: str, start: int) -> tuple[str, int]:
             index += 1
             continue
         if char == '"':
-            return "".join(out), index + 1
+            return Quoted("".join(out)), index + 1
         out.append(char)
         index += 1
 
-    return "".join(out), index
+    return Quoted("".join(out)), index
 
 
 def _read_atom(text: str, start: int) -> tuple[str, int]:
@@ -155,3 +167,50 @@ def is_hidden(node: SExpr | None) -> bool:
         if flag is not None and value_of(flag, default="yes") != "no":
             return True
     return False
+
+
+_WRITE_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def quote(text: str) -> str:
+    """``text`` as a quoted atom, escaped the way KiCad writes it."""
+    return '"' + "".join(_WRITE_ESCAPES.get(c, c) for c in text) + '"'
+
+
+def _atom(atom: str) -> str:
+    if isinstance(atom, Quoted) or not atom or any(c in _DELIMITERS for c in atom):
+        return quote(atom)
+    return atom
+
+
+def dumps(node: SExpr, *, indent: str = "\t") -> str:
+    """Write ``node`` back out as KiCad formats it.
+
+    A list whose items are all atoms stays on one line; a list holding other
+    lists puts each of them on its own line, one ``indent`` deeper. KiCad reads
+    any layout, so this matters only for diffs and for people reading the file.
+    """
+    out: list[str] = []
+    _write(node, out, 0, indent)
+    out.append("\n")
+    return "".join(out)
+
+
+def _write(node: SExpr, out: list[str], depth: int, indent: str) -> None:
+    if not isinstance(node, list):
+        out.append(_atom(node))
+        return
+    out.append("(")
+    nested = False
+    for i, item in enumerate(node):
+        if isinstance(item, list):
+            nested = True
+            out.append("\n" + indent * (depth + 1))
+            _write(item, out, depth + 1, indent)
+        else:
+            if i:
+                out.append("\n" + indent * (depth + 1) if nested else " ")
+            out.append(_atom(item))
+    if nested:
+        out.append("\n" + indent * depth)
+    out.append(")")

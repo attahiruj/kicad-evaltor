@@ -21,6 +21,7 @@ from kicad_evaltor.checks.schematic.sheets import (
     SheetPinMismatchCheck,
 )
 from kicad_evaltor.checks.schematic.symbol_in_library import SymbolInLibraryCheck
+from kicad_evaltor.checks.schematic.symbol_matches_library import SymbolMatchesLibraryCheck
 
 __all__ = [
     "ComponentExistsCheck",
@@ -36,6 +37,7 @@ __all__ = [
     "SheetNameOrPageCollisionCheck",
     "SheetPinMismatchCheck",
     "SymbolInLibraryCheck",
+    "SymbolMatchesLibraryCheck",
     "SymbolSymbolOverlapCheck",
     "SymbolWireOverlapCheck",
     "TextOffSheetCheck",

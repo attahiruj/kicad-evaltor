@@ -88,6 +88,9 @@ class SymbolPin:
     ``offset`` is the pin's own ``(offset ...)`` shift, applied in library
     coordinates before the symbol is placed. ``hidden`` marks a pin KiCad does not
     draw, which is how a symbol carries its unconnected and reserved pins.
+    ``electrical_type`` is KiCad's pin type (``input``, ``power_in``,
+    ``passive``...) and ``shape`` its graphic style (``line``, ``inverted``,
+    ``clock``...).
     """
 
     name: str
@@ -97,6 +100,8 @@ class SymbolPin:
     length: float
     offset: Point = (0.0, 0.0)
     hidden: bool = False
+    electrical_type: str = ""
+    shape: str = ""
 
     @property
     def connection(self) -> Point:
@@ -340,6 +345,8 @@ def _symbol_pins(sub: SExpr) -> tuple[SymbolPin, ...]:
                 length=lengths[0] if lengths else 2.54,
                 offset=_point(child(pin, "offset")),
                 hidden=is_hidden(pin),
+                electrical_type=value_of(pin, 1),
+                shape=value_of(pin, 2),
             )
         )
     return tuple(pins)
@@ -608,7 +615,9 @@ def extract(schematic: FileSchematic) -> SchematicScene:
     scene = SchematicScene()
 
     for symbol in schematic.get_symbols():
-        geometry = _lookup_geometry(lib_symbols, symbol.lib_id, symbol.unit, symbol.body_style)
+        geometry = _lookup_geometry(
+            lib_symbols, symbol.embedded_name, symbol.unit, symbol.body_style
+        )
         body: BBox | None = None
         body_parts: tuple[BBox, ...] = ()
         pin_boxes: list[BBox] = []
