@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from conftest import (
     FakeContext,
     FakeNetlistNet,
@@ -22,6 +24,7 @@ from kicad_evaltor.checks.schematic.erc_check import ERCRunCheck
 from kicad_evaltor.checks.schematic.footprint_assigned import FootprintAssignedCheck
 from kicad_evaltor.checks.schematic.symbol_in_library import SymbolInLibraryCheck
 from kicad_evaltor.core.runner import TestRunner
+from kicad_evaltor.utils.kicad_cli import SubprocessResult
 
 
 def ctx_with(symbols=None, nets=None, cli=None) -> FakeContext:
@@ -486,6 +489,32 @@ class TestERCRunCheck:
 
         # An unreadable report must not read as "clean".
         assert result.status == TestStatus.ERROR
+
+    def test_timeout_param_reaches_kicad_cli(self):
+        ctx = ctx_with([FakeSymbol("R1")], cli=erc_report())
+        run(ERCRunCheck(timeout=900), ctx)
+
+        assert ctx.cli_timeouts == [900]
+
+    def test_no_timeout_param_defers_to_the_context(self):
+        ctx = ctx_with([FakeSymbol("R1")], cli=erc_report())
+        run(ERCRunCheck(), ctx)
+
+        assert ctx.cli_timeouts == [None]
+
+    def test_rejects_a_non_positive_timeout(self):
+        with pytest.raises(ValueError, match="timeout"):
+            ERCRunCheck(timeout=0)
+
+    def test_timeout_is_an_error_even_when_not_strict(self):
+        timed_out = SubprocessResult(-1, "", "Command timed out after 5s", timed_out=True)
+        ctx = ctx_with([FakeSymbol("R1")], cli=timed_out)
+        result = run(ERCRunCheck(), ctx)
+
+        # A skip would let a slow host pass a run that never checked anything.
+        assert result.status == TestStatus.ERROR
+        assert result.details["timed_out"] is True
+        assert "timed out" in result.message
 
     def test_command_failure_skips_by_default(self):
         ctx = ctx_with([FakeSymbol("R1")], cli=cli_result(returncode=1, stderr="boom"))

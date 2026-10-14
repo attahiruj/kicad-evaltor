@@ -17,14 +17,24 @@ class SubprocessResult:
     returncode: int
     stdout: str
     stderr: str
+    timed_out: bool = False
 
     @property
     def success(self) -> bool:
         return self.returncode == 0
 
 
+DEFAULT_CLI_TIMEOUT = 600.0
+"""Seconds a kicad-cli call may run before it is abandoned.
+
+ERC, DRC and netlist export on a large but valid design can take minutes on a
+busy host, and abandoning one early reports a tooling failure as if it were a
+design failure, so the default errs long. Pass ``timeout`` to tighten it.
+"""
+
+
 def run_kicad_cli(
-    args: list[str], cwd: Path | str | None = None, timeout: int = 60
+    args: list[str], cwd: Path | str | None = None, timeout: float = DEFAULT_CLI_TIMEOUT
 ) -> SubprocessResult:
     try:
         result = subprocess.run(
@@ -43,7 +53,8 @@ def run_kicad_cli(
         return SubprocessResult(
             returncode=-1,
             stdout=e.stdout.decode() if e.stdout else "",
-            stderr=f"Command timed out after {timeout}s",
+            stderr=f"Command timed out after {timeout:g}s",
+            timed_out=True,
         )
     except FileNotFoundError:
         return SubprocessResult(

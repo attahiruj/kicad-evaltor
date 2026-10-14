@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 from kicad_evaltor.hierarchy import SchematicTree, tree_for
 from kicad_evaltor.schematic_file import FileSchematic, FileSymbol, load_schematic
-from kicad_evaltor.utils.kicad_cli import SubprocessResult, run_kicad_cli
+from kicad_evaltor.utils.kicad_cli import DEFAULT_CLI_TIMEOUT, SubprocessResult, run_kicad_cli
 
 
 @dataclass
@@ -33,13 +33,17 @@ class DesignContext:
         headless: bool = True,
         kicad_cli_path: str | None = None,
         timeout_ms: int = 5000,
+        cli_timeout: float = DEFAULT_CLI_TIMEOUT,
     ) -> None:
+        if cli_timeout <= 0:
+            raise ValueError("cli_timeout must be positive")
         self._project_path = Path(project_path) if project_path else None
         self._schematic_path = Path(schematic_path) if schematic_path else None
         self._board_path = Path(board_path) if board_path else None
         self._headless = headless
         self._kicad_cli_path = kicad_cli_path
         self._timeout_ms = timeout_ms
+        self._cli_timeout = cli_timeout
 
         self._kicad_instance = KiCadInstance()
         self._kicad: KiCad | None = None
@@ -232,14 +236,25 @@ class DesignContext:
 
         raise RuntimeError("Failed to start kicad-cli api-server")
 
-    def run_kicad_cli(self, args: list[str]) -> SubprocessResult:
+    @property
+    def kicad_cli_path(self) -> str | None:
+        """The kicad-cli this context was given, or None to look on ``PATH``."""
+        return self._kicad_cli_path
+
+    @property
+    def cli_timeout(self) -> float:
+        """Seconds a kicad-cli call may run unless the caller asks otherwise."""
+        return self._cli_timeout
+
+    def run_kicad_cli(self, args: list[str], *, timeout: float | None = None) -> SubprocessResult:
+        """Run kicad-cli, allowing ``timeout`` seconds or the context's default."""
         cli_path = self._kicad_cli_path
         if cli_path is None:
             import shutil
 
             cli_path = shutil.which("kicad-cli")
         return (
-            run_kicad_cli([cli_path, *args])
+            run_kicad_cli([cli_path, *args], timeout=timeout or self._cli_timeout)
             if cli_path
             else SubprocessResult(
                 returncode=-1,

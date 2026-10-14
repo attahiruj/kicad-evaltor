@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from kicad_evaltor.utils.kicad_cli import (
+    DEFAULT_CLI_TIMEOUT,
     SubprocessResult,
     filter_violations_by_severity,
     parse_drc_report,
@@ -100,10 +101,25 @@ class TestRunKiCadCli:
             raise subprocess.TimeoutExpired(cmd=args, timeout=60)
 
         monkeypatch.setattr(subprocess, "run", raise_timeout)
-        result = run_kicad_cli(["kicad-cli", "sch", "erc"])
+        result = run_kicad_cli(["kicad-cli", "sch", "erc"], timeout=60)
 
         assert result.returncode == -1
         assert "timed out after 60s" in result.stderr
+        assert result.timed_out
+
+    def test_default_timeout_allows_a_slow_run(self, monkeypatch):
+        seen = {}
+
+        def fake_run(args, **kwargs):
+            seen.update(kwargs)
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = run_kicad_cli(["kicad-cli", "sch", "erc"])
+
+        assert seen["timeout"] == DEFAULT_CLI_TIMEOUT
+        assert DEFAULT_CLI_TIMEOUT > 60
+        assert not result.timed_out
 
     def test_timeout_keeps_partial_stdout(self, monkeypatch):
         def raise_timeout(args, **kwargs):

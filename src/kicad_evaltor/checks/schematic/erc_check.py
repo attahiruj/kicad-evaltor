@@ -19,10 +19,14 @@ class ERCRunParams(CheckParams):
     severity: str = "error"
     schematic_path: str | None = None
     strict: bool = False
+    timeout: float | None = None
+    """Seconds kicad-cli may run; None uses the context's ``cli_timeout``."""
 
     def validate(self) -> None:
         if self.severity not in ("error", "warning", "all"):
             raise ValueError("severity must be 'error', 'warning', or 'all'")
+        if self.timeout is not None and self.timeout <= 0:
+            raise ValueError("timeout must be positive")
 
 
 @register
@@ -42,8 +46,17 @@ class ERCRunCheck(Check[ERCRunParams]):
 
         with report_workspace("erc") as workdir:
             args = ["sch", "erc", "--format", "json", "-o", str(workdir / "report.json"), sch_path]
-            result = ctx.run_kicad_cli(args)
+            result = ctx.run_kicad_cli(args, timeout=params.timeout)
 
+            if result.timed_out:
+                # A timeout says nothing about the design, so it is never a skip
+                # that could pass a run unnoticed, nor a violation.
+                return CheckResult.error(
+                    self.id,
+                    f"ERC did not finish: {result.stderr}; raise the check's timeout "
+                    "or the context's cli_timeout",
+                    timed_out=True,
+                )
             if not result.success:
                 if params.strict:
                     return CheckResult.error(self.id, f"ERC command failed: {result.stderr}")

@@ -238,6 +238,25 @@ class TestRunKiCadCli:
         assert seen["args"] == ["/custom/kicad-cli", "sch", "erc"]
         assert result.success
 
+    def test_timeout_defaults_to_the_context_setting(self, monkeypatch):
+        seen = {}
+
+        def fake_run(args, cwd=None, timeout=60):
+            seen["timeout"] = timeout
+            return SubprocessResult(0, "ok", "")
+
+        monkeypatch.setattr(context_module, "run_kicad_cli", fake_run)
+        ctx = DesignContext(kicad_cli_path="/custom/kicad-cli", cli_timeout=900)
+        ctx.run_kicad_cli(["sch", "erc"])
+        assert seen["timeout"] == 900
+
+        ctx.run_kicad_cli(["sch", "erc"], timeout=30)
+        assert seen["timeout"] == 30
+
+    def test_rejects_a_non_positive_cli_timeout(self):
+        with pytest.raises(ValueError, match="cli_timeout"):
+            DesignContext(cli_timeout=0)
+
     def test_falls_back_to_path_lookup(self, monkeypatch):
         import shutil
 

@@ -539,6 +539,7 @@ class FakeContext:
             cli_results = [cli_results]
         self._cli_results = list(cli_results)
         self.cli_calls: list[list[str]] = []
+        self.cli_timeouts: list[float | None] = []
 
     def has_schematic(self) -> bool:
         return self._schematic is not None
@@ -572,8 +573,9 @@ class FakeContext:
     def board_path(self) -> Path:
         return self._board_path
 
-    def run_kicad_cli(self, args: list[str]) -> SubprocessResult:
+    def run_kicad_cli(self, args: list[str], *, timeout: float | None = None) -> SubprocessResult:
         self.cli_calls.append(args)
+        self.cli_timeouts.append(timeout)
         result = self._next_cli_result()
         self._write_report_file(args, result)
         return result
