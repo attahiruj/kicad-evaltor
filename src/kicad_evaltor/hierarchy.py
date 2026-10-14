@@ -219,6 +219,7 @@ class SchematicTree:
                 cli_path=self._root.cli_path(),
                 project_dir=self._root.project_dir(),
                 instance_path=child.path,
+                cli_timeout=self._root.cli_timeout(),
             )
         except (OSError, ValueError) as exc:
             self._problems.append(SheetProblem(UNREADABLE, child, str(exc)))

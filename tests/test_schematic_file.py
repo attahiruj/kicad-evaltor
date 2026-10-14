@@ -289,7 +289,7 @@ class TestFileSchematicNetlist:
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         monkeypatch.setattr(subprocess, "run", fake_run)
-        netlist = FileSchematic(minimal_sch, cli_path="kicad-cli").get_netlist()
+        netlist = FileSchematic(minimal_sch, cli_path="kicad-cli").get_netlist("kicadsexpr")
 
         assert [n.name for n in netlist.nets] == ["/SDA"]
         assert [(n.ref, n.pin) for n in netlist.nets[0].nodes] == [("U1", "15"), ("U2", "14")]
@@ -304,7 +304,7 @@ class TestFileSchematicNetlist:
 
         monkeypatch.setattr(subprocess, "run", fake_run)
 
-        assert FileSchematic(minimal_sch, cli_path="kicad-cli").get_netlist().nets == []
+        assert FileSchematic(minimal_sch, cli_path="kicad-cli").get_netlist("kicadsexpr").nets == []
 
 
 class TestHelpers:

@@ -91,6 +91,7 @@ class DesignContext:
                 self.schematic_path,
                 cli_path=self._kicad_cli_path,
                 project_dir=self.project_dir,
+                cli_timeout=self._cli_timeout,
             )
         return self._schematic
 

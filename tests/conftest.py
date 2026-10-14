@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from kicad_evaltor.checks.registry import CheckRegistry
+from kicad_evaltor.netlist import FileNet, FileNetComponent, FileNetlist, FileNetNode
 from kicad_evaltor.utils.kicad_cli import SubprocessResult
 
 
@@ -385,14 +386,18 @@ class FakeSchematic:
         self,
         symbols: list[Any] | None = None,
         nets: list[FakeNetlistNet] | None = None,
+        netlist: Any = None,
     ) -> None:
         self._symbols = symbols if symbols is not None else []
-        self._netlist = FakeNetlist(nets)
+        # A real FileNetlist when the check under test needs its lookups.
+        self._netlist = netlist if netlist is not None else FakeNetlist(nets)
+        self.netlist_formats: list[str] = []
 
     def get_symbols(self) -> list[Any]:
         return self._symbols
 
-    def get_netlist(self) -> FakeNetlist:
+    def get_netlist(self, format: str = "kicadxml") -> Any:
+        self.netlist_formats.append(format)
         return self._netlist
 
 
@@ -662,3 +667,32 @@ def schematic_ctx() -> FakeContext:
 @pytest.fixture
 def board_ctx() -> FakeContext:
     return FakeContext(board=FakeBoard())
+
+
+# ------------------------------------------------------------------- netlists
+
+
+def netlist_of(
+    *nets: tuple[str, list[tuple[str, str] | tuple[str, str, str]]],
+    components: dict[str, str | FileNetComponent] | None = None,
+) -> FileNetlist:
+    """A real netlist from ``(net, [(ref, pin[, pin_name]), ...])`` tuples.
+
+    ``components`` maps a reference to its ``lib_id``, or to a whole
+    ``FileNetComponent`` when the test needs a value or description; any
+    reference on a net and not listed gets an empty one. The connectivity code
+    reads real ``FileNetlist`` lookups, so these tests build the real thing.
+    """
+    built = [
+        FileNet(
+            name,
+            [FileNetNode(n[0], n[1], name, pinfunction=n[2] if len(n) > 2 else "") for n in nodes],
+        )
+        for name, nodes in nets
+    ]
+    comps = {node.ref: FileNetComponent(node.ref) for net in built for node in net.nodes}
+    for ref, spec in (components or {}).items():
+        comps[ref] = (
+            spec if isinstance(spec, FileNetComponent) else FileNetComponent(ref, lib_id=spec)
+        )
+    return FileNetlist(built, comps)

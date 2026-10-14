@@ -20,6 +20,25 @@ from pathlib import Path
 from typing import Any
 
 from kicad_evaltor.geometry import Placement
+
+# FileNet, FileNetComponent and FileNetNode are re-exported for callers that
+# imported them from here before the netlist got a module of its own.
+from kicad_evaltor.netlist import (
+    NETLIST_FORMATS,
+    FileNetlist,
+    NetlistFormat,
+    NetlistParseError,
+    parse_netlist,
+)
+from kicad_evaltor.netlist import (
+    FileNet as FileNet,
+)
+from kicad_evaltor.netlist import (
+    FileNetComponent as FileNetComponent,
+)
+from kicad_evaltor.netlist import (
+    FileNetNode as FileNetNode,
+)
 from kicad_evaltor.sexpr import SExpr, child, children, head, is_hidden, parse, value_of, words_of
 from kicad_evaltor.sheets import (
     HierarchicalLabel,
@@ -27,6 +46,7 @@ from kicad_evaltor.sheets import (
     label_from_node,
     sheet_from_node,
 )
+from kicad_evaltor.utils.kicad_cli import DEFAULT_CLI_TIMEOUT
 
 # KiCad's standard symbol properties, exposed as `fields` the way kipy does.
 _STANDARD_PROPERTIES = frozenset(
@@ -111,9 +131,19 @@ class FileSymbol:
         fields: tuple[FileField, ...] = (),
         sheet: str | None = None,
         sheet_path: str = "/",
+        dnp: bool = False,
+        in_bom: bool = True,
+        on_board: bool = True,
+        exclude_from_sim: bool = False,
+        lib_name: str | None = None,
     ) -> None:
         self.reference = reference
         self.lib_id = lib_id
+        # KiCad embeds a placed symbol under its lib_id unless two instances of
+        # that lib_id need different copies; it then embeds this one under
+        # ``lib_name`` instead. ``embedded_name`` is the key into lib_symbols.
+        self.lib_name = lib_name
+
         self.value = value
         self.footprint = FootprintRef(footprint)
         # One source for every property; fields and user_fields below are the
@@ -131,6 +161,18 @@ class FileSymbol:
         self.unit = unit
         self.body_style = body_style
         self.field_list = fields
+        # The placement flags KiCad writes on every instance. "Exclude from
+        # board" is ``on_board`` False: such a part is still in the design and
+        # still on its nets, just not on the PCB.
+        self.dnp = dnp
+        self.in_bom = in_bom
+        self.on_board = on_board
+        self.exclude_from_sim = exclude_from_sim
+
+    @property
+    def embedded_name(self) -> str:
+        """The name of this symbol's copy in the sheet's ``lib_symbols``."""
+        return self.lib_name or self.lib_id
 
     @property
     def texts(self) -> tuple[FileField, ...]:
@@ -145,24 +187,6 @@ class FootprintRef:
 class Text:
     def __init__(self, value: str) -> None:
         self.value = value
-
-
-class FileNetNode:
-    def __init__(self, ref: str, pin: str, net: str) -> None:
-        self.ref = ref
-        self.pin = pin
-        self.net = net
-
-
-class FileNet:
-    def __init__(self, name: str, nodes: list[FileNetNode]) -> None:
-        self.name = name
-        self.nodes = nodes
-
-
-class FileNetlist:
-    def __init__(self, nets: list[FileNet]) -> None:
-        self.nets = nets
 
 
 class NetlistUnavailable(RuntimeError):
@@ -190,9 +214,12 @@ class FileSchematic:
         cli_path: str | None = None,
         project_dir: Path | None = None,
         instance_path: str = "/",
+        cli_timeout: float = DEFAULT_CLI_TIMEOUT,
     ) -> None:
         self._path = Path(path)
         self._cli_path = cli_path
+        self._cli_timeout = cli_timeout
+        self._netlists: dict[str, FileNetlist] = {}
         self._project_dir = Path(project_dir) if project_dir else None
         self._instance_path = instance_path
         self._document = self._load()
@@ -215,6 +242,10 @@ class FileSchematic:
     def cli_path(self) -> str | None:
         """The kicad-cli path this schematic was configured with, if any."""
         return self._cli_path
+
+    def cli_timeout(self) -> float:
+        """Seconds a kicad-cli call made for this schematic may run."""
+        return self._cli_timeout
 
     def instance_path(self) -> str:
         """The uuid instance path of the sheet this file draws."""
@@ -349,29 +380,36 @@ class FileSchematic:
             unit=int(float(value_of(child(node, "unit")) or 1)),
             body_style=int(float(value_of(child(node, "body_style")) or 1)),
             fields=tuple(fields),
+            dnp=_flag(node, "dnp", default=False),
+            in_bom=_flag(node, "in_bom", default=True),
+            on_board=_flag(node, "on_board", default=True),
+            exclude_from_sim=_flag(node, "exclude_from_sim", default=False),
+            lib_name=value_of(child(node, "lib_name")) or None,
         )
 
-    def get_netlist(self) -> FileNetlist:
-        """Export connectivity with kicad-cli rather than reimplementing it."""
-        document = self._export_netlist()
-        nets = []
-        nets_node = child(document, "nets")
-        if nets_node is not None:
-            for net in children(nets_node, "net"):
-                name = value_of(child(net, "name"))
-                if not name:
-                    continue
-                nodes = []
-                for node in children(net, "node"):
-                    ref = value_of(child(node, "ref"))
-                    if ref:
-                        nodes.append(
-                            FileNetNode(ref=ref, pin=value_of(child(node, "pin")), net=name)
-                        )
-                nets.append(FileNet(name, nodes))
-        return FileNetlist(nets)
+    def get_netlist(self, format: NetlistFormat = "kicadxml") -> FileNetlist:
+        """Export connectivity with kicad-cli rather than reimplementing it.
 
-    def _export_netlist(self) -> list[SExpr]:
+        ``kicadxml``, the default, keeps symbols marked "exclude from board" and
+        carries pin names and each component's DNP and BOM flags; ``kicadsexpr``
+        drops those symbols. The export is run once per format and kept, since
+        the file it was made from does not change under this object.
+        """
+        if format not in NETLIST_FORMATS:
+            raise ValueError(
+                f"unknown netlist format {format!r}; expected one of {NETLIST_FORMATS}"
+            )
+        if format not in self._netlists:
+            text = self._export_netlist(format)
+            try:
+                self._netlists[format] = parse_netlist(text, format)
+            except NetlistParseError as exc:
+                raise NetlistUnavailable(
+                    f"netlist export produced unreadable output: {exc}"
+                ) from exc
+        return self._netlists[format]
+
+    def _export_netlist(self, format: NetlistFormat) -> str:
         cli = self._resolve_cli()
         if cli is None:
             raise NetlistUnavailable(
@@ -388,16 +426,20 @@ class FileSchematic:
                         "export",
                         "netlist",
                         "--format",
-                        "kicadsexpr",
+                        format,
                         "-o",
                         str(target),
                         str(self._path),
                     ],
                     capture_output=True,
                     text=True,
-                    timeout=300,
+                    timeout=self._cli_timeout,
                     check=False,
                 )
+            except subprocess.TimeoutExpired as exc:
+                raise NetlistUnavailable(
+                    f"netlist export timed out after {self._cli_timeout:g}s"
+                ) from exc
             except (OSError, subprocess.SubprocessError) as exc:
                 raise NetlistUnavailable(f"netlist export failed: {exc}") from exc
 
@@ -405,16 +447,20 @@ class FileSchematic:
                 detail = (result.stderr or result.stdout).strip()
                 raise NetlistUnavailable(f"netlist export failed: {detail}")
 
-            document = parse(target.read_text(encoding="utf-8", errors="replace"))
-
-        if not isinstance(document, list):
-            raise NetlistUnavailable("netlist export produced unreadable output")
-        return document
+            return target.read_text(encoding="utf-8", errors="replace")
 
     def _resolve_cli(self) -> str | None:
         if self._cli_path:
             return self._cli_path
         return shutil.which("kicad-cli") or shutil.which("kicad-cli.exe")
+
+
+def _flag(node: list[SExpr], keyword: str, *, default: bool) -> bool:
+    """A ``(keyword yes|no)`` flag, or ``default`` when the file leaves it out."""
+    found = child(node, keyword)
+    if found is None:
+        return default
+    return value_of(found, default="yes") == "yes"
 
 
 def _atom_numbers(node: list[SExpr] | None) -> list[float]:
@@ -486,10 +532,15 @@ def load_schematic(
     cli_path: str | None = None,
     project_dir: Path | None = None,
     instance_path: str = "/",
+    cli_timeout: float = DEFAULT_CLI_TIMEOUT,
 ) -> FileSchematic:
     """Convenience wrapper matching the other loader helpers."""
     return FileSchematic(
-        path, cli_path=cli_path, project_dir=project_dir, instance_path=instance_path
+        path,
+        cli_path=cli_path,
+        project_dir=project_dir,
+        instance_path=instance_path,
+        cli_timeout=cli_timeout,
     )
 
 
