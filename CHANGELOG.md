@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `DesignContext(cli_timeout=...)` sets how long a kicad-cli call may run, and
+  `sch.erc` and `pcb.drc` take a per-check `timeout`. Netlist export uses the
+  same setting.
+- `FileSchematic.get_netlist(format=...)` reads either export format into a
+  richer model. Each node carries its pin name (`pinfunction`) and electrical
+  type (`pintype`). `FileNetlist.components` lists every component with its
+  `lib_id`, fields, and `dnp`, `exclude_from_bom` and `exclude_from_board`
+  flags. Lookups `net`, `node`, `net_of`, `pins_of` and `nodes_on` answer
+  without walking the nets.
+- `FileSymbol` reads each instance's `dnp`, `in_bom`, `on_board` and
+  `exclude_from_sim` flags.
+- `kicad_evaltor.connectivity`: `Connectivity(netlist).reach(net)` follows a
+  signal across chosen parts, such as series resistors or a flow-through ESD
+  array, and stops at power rails. Which parts conduct, and between which pins,
+  is set by composable bridges (`series_parts`, `pin_pairs`, `same_pin_name`,
+  `whole_part`, `any_of`).
+- `sch.components.connected` takes `through_passives=True` to count connections
+  made through series resistors, inductors and ferrite beads.
+- `kicad_evaltor.symbol_library`: `SymbolLibraries` reads symbols by
+  `Library:Symbol` from KiCad's stock folders (found via `KICADn_SYMBOL_DIR`,
+  the `kicad-cli` install, or the standard locations), `.kicad_symdir` folders,
+  and a project's `sym-lib-table`. `resolve` flattens `extends` the way KiCad
+  does: the result matches what KiCad embeds in a schematic byte for byte.
+  `symbol_signature` and `symbol_diff` compare two symbols by their pins and
+  body, ignoring fields, names and uuids.
+- `sch.symbol.matches_library` checks that placed symbols are unchanged copies
+  of their library symbols, or of one named `expected_lib_id`, and reports each
+  difference.
+- `kicad_evaltor.edit`, for building fixtures from a reference design:
+  `swap_symbol` changes a part to another library symbol, embedding the
+  flattened copy so ERC sees no `lib_symbol_mismatch`; `embed_symbol` and
+  `set_symbol_property` round it out, and `load_document`/`save_document`
+  read and write the file.
+- `sexpr.dumps` writes an s-expression tree back out. Quoted atoms parse as
+  `sexpr.Quoted`, a `str` subclass, so the quoting survives a round trip.
+- `SymbolPin` carries the pin's `electrical_type` and `shape`, and `FileSymbol`
+  its `lib_name`.
+- `kicad_evaltor.values.parse_value` reads component values as numbers: SI
+  prefixes, RKM notation (`4k7`, `2R2`, `3V3`), units and trailing ratings
+  (`100nF/50V`). `sch.component.value` takes `numeric=True` and a `tolerance`
+  to compare that way.
+- `kicad_evaltor.regulators.regulator_output` works out what a linear regulator
+  outputs. A fixed part's voltage is read from its name or library
+  description. An adjustable part's comes from its reference voltage and the
+  resistor network on its feedback pin, solved by nodal analysis, so series
+  and parallel resistors count. A current-reference part (LT3080, LT3042/45)
+  uses its SET current and resistor. Reference voltages for common stock
+  `Regulator_Linear` parts ship in `_regulators.json`, each citing its
+  datasheet parameter; `register_regulator` adds others. When the output
+  cannot be worked out, the result says why.
+- `sch.regulator.output_voltage` checks a regulator's output against an
+  expected voltage within a tolerance, and is an `ERROR`, not a `FAIL`, when
+  the output cannot be determined.
+- `kicad_evaltor.pin_roles` classifies differential pair pins by name: the USB
+  rule covers `D+`, `UD+`, `USBDP`, `USBD+`, `USB_D+`, `DP` and the like,
+  including MCU pins such as `PA12/USB_DP`, and there are rules for CAN and
+  for generic `+`/`-` and `_P`/`_N` pairs. `usb_polarity(name)` is the short
+  form.
+- `sch.pair.polarity` checks that each half of a pair leaves one part and
+  reaches the same half of another, never the opposite one, through series
+  resistors and any flow-through parts named in `through` or `through_pins`.
+
+### Changed
+
+- kicad-cli calls default to a 600 s timeout instead of 60 s, so a large but
+  valid design is no longer failed by a busy host. A run that times out is an
+  `ERROR` naming the timeout, never a skip, even without `strict`.
+- Netlists are exported as `kicadxml` by default. The `kicadsexpr` export
+  leaves out every symbol marked "exclude from board", so a correctly wired
+  off-board part had no pins on any net. Pass `format="kicadsexpr"` for the
+  old behaviour.
+- The netlist is exported once per `FileSchematic` and format, not on every
+  call.
+- Pin names in a netlist no longer carry the `_<number>` suffix KiCad 10
+  appends (`FB_10` reads as `FB`).
+- Net names read from a `kicadsexpr` export have KiCad's escapes undone
+  (`{slash}` becomes `/`), so both formats spell a net the same way.
+
+### Fixed
+
+- A placed symbol that KiCad embeds under a `lib_name` alias is measured with
+  that copy's body and pins, not with the copy under its `lib_id`.
+
 ## [0.3.0] - 2026-10-04
 
 ### Added

@@ -29,8 +29,9 @@ A `kicad-cli` binary is needed only for the checks that shell out:
 
 | Check | Needs |
 |-------|-------|
-| `sch.components.connected` | `kicad-cli sch export netlist` |
+| `sch.components.connected`, `sch.regulator.output_voltage`, `sch.pair.polarity` | `kicad-cli sch export netlist` |
 | `sch.erc` | `kicad-cli sch erc` |
+| `sch.symbol.matches_library` | KiCad's symbol libraries (found next to `kicad-cli`, or via `KICAD10_SYMBOL_DIR`) |
 
 Without it those checks report an error and the rest of the suite still runs.
 On Windows, KiCad is not put on `PATH` by default; pass
@@ -104,12 +105,42 @@ python examples/visual.py path/to/your.kicad_sch          # any other sheet
 | Check ID | Class | Description |
 |----------|-------|-------------|
 | `sch.component.exists` | `ComponentExistsCheck` | A component exists, by reference or `lib_id` pattern |
-| `sch.component.value` | `ComponentValueCheck` | A component's value matches, case-insensitively |
+| `sch.component.value` | `ComponentValueCheck` | A component's value matches, case-insensitively, or as a number within a tolerance (`numeric=True`: `4k7` equals `4.7k`) |
 | `sch.component.property` | `ComponentPropertyCheck` | An arbitrary field on a component matches |
-| `sch.components.connected` | `ComponentsConnectedCheck` | Two components share at least N nets |
+| `sch.components.connected` | `ComponentsConnectedCheck` | Two components share at least N nets, optionally counting through series passives |
 | `sch.footprint.assigned` | `FootprintAssignedCheck` | Footprints are assigned, optionally allowing `None` |
 | `sch.symbol.in_library` | `SymbolInLibraryCheck` | A symbol exists in the project libraries |
-| `sch.erc` | `ERCRunCheck` | Runs ERC via `kicad-cli` and filters by severity |
+| `sch.symbol.matches_library` | `SymbolMatchesLibraryCheck` | Placed symbols are unchanged copies of their library symbols (pins and body; fields ignored) |
+| `sch.regulator.output_voltage` | `RegulatorOutputCheck` | A linear regulator's output, worked out from its part and divider, is the expected voltage |
+| `sch.pair.polarity` | `PairPolarityCheck` | Each half of a differential pair (USB, CAN, `+`/`-`) reaches the same half at the far part, never the other |
+| `sch.erc` | `ERCRunCheck` | Runs ERC via `kicad-cli` and filters by severity; `timeout` sets how long it may run |
+
+### Building blocks
+
+The checks above are thin layers over modules you can use directly:
+
+| Module | What it gives you |
+|--------|-------------------|
+| `kicad_evaltor.netlist` | `FileSchematic.get_netlist()` as nets, pins (with pin names and types) and components (with DNP, BOM and board flags) |
+| `kicad_evaltor.connectivity` | `Connectivity(netlist).reach(net, through=...)`: follow a signal across series resistors, flow-through arrays or any parts you choose, stopping at power rails |
+| `kicad_evaltor.values` | `parse_value("4k7") == 4700.0`, with SI prefixes, RKM notation and units |
+| `kicad_evaltor.regulators` | `regulator_output(netlist, "U3")`: a regulator's output voltage and how it was worked out; `register_regulator` for parts it does not know |
+| `kicad_evaltor.pin_roles` | `usb_polarity("UD+") == "D+"`, and `PairRule` for other pairs |
+| `kicad_evaltor.symbol_library` | Read KiCad libraries, flatten `extends`, compare symbols by signature |
+| `kicad_evaltor.edit` | Build fixtures: `swap_symbol`, `embed_symbol` and `set_symbol_property` on a reference design, then `save_document` |
+
+```python
+from kicad_evaltor import Connectivity, regulator_output
+from kicad_evaltor.schematic_file import load_schematic
+
+netlist = load_schematic("board.kicad_sch").get_netlist()
+print(regulator_output(netlist, "U3"))  # volts, method, or the reason it is unknown
+print(Connectivity(netlist).reach("/USB_DP").crossed)  # series parts on the way
+```
+
+A slow host can need more than the default 600 s for kicad-cli. Raise it per
+context with `DesignContext(cli_timeout=900)` or per check with
+`ERCRunCheck(timeout=900)`.
 
 ### Hierarchical sheets
 

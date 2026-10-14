@@ -32,8 +32,36 @@ core/runner.py      TestReport
 
 ### `sexpr.py`
 
-A small s-expression reader. No knowledge of KiCad beyond the `(head value ...)`
-shape. Everything above it works with plain nested lists and strings.
+A small s-expression reader and writer. No knowledge of KiCad beyond the
+`(head value ...)` shape. Everything above it works with plain nested lists and
+strings; a quoted atom is a `Quoted` string so `dumps` can write it back quoted.
+
+### `symbol_library.py`
+
+Finds and reads KiCad symbol libraries, resolves `extends`, and compares
+symbols by signature. Flattening is held to what KiCad itself embeds: the
+tests compare it byte for byte against the demo designs' `lib_symbols`.
+
+### `values.py` and `regulators.py`
+
+`values.py` reads a value string as a number and refuses anything it is not
+sure of. `regulators.py` builds on it and on the netlist to work out a
+regulator's output. Part knowledge (which pin is feedback, what `Vref` is)
+lives in data, in `_regulators.json` or in user registrations, and never in
+code paths, so a missing part is a data change. Where the answer is uncertain,
+for example when a symbol's name and description disagree, the result is
+"unknown, because..." rather than a guess.
+
+### `pin_roles.py`
+
+Pin-name rules for the two halves of a differential pair. A rule is data, a
+`PairRule` of patterns, so a new interface is a new rule rather than new code.
+
+### `edit.py`
+
+The only module that writes a schematic, and only on request. It exists for
+fixture building, where an edited file must fail for the reason the fixture is
+about and not because an embedded symbol drifted from its library.
 
 ### `schematic_file.py`
 
@@ -52,6 +80,22 @@ against a real rendering.
 
 `lib_symbols` is read as well, so a symbol's body and pins can be recovered by
 looking up each placed symbol's `lib_id`.
+
+### `netlist.py`
+
+Reads a netlist exported by `kicad-cli` into `FileNetlist`: nets of pins, plus
+the components, with their flags. XML is the default format because the
+s-expression export leaves out symbols marked "exclude from board". Connectivity
+itself is never computed here. KiCad resolves wires, labels and sheet pins, and
+this module only reads the result.
+
+### `connectivity.py`
+
+Reachability over a `FileNetlist`, treating chosen parts as conductors. A
+*bridge* decides which pins of a part are joined inside it; the caller picks
+the bridges, because whether a part conducts depends on the question being
+asked. Traversal stops at power rails by default, since one pull-up would
+otherwise join every signal on the board.
 
 ### `sheets.py`
 
