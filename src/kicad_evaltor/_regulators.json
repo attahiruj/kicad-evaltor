@@ -1,0 +1,26 @@
+{
+  "_comment": "Linear regulators whose output is set by external parts. vref is the feedback reference in volts (negative for negative regulators); iset is the SET-pin reference current in amps. Each entry names the datasheet parameter it came from. Patterns are fnmatch globs over lib_id.",
+  "models": [
+    {"patterns": ["Regulator_Linear:LM317*", "Regulator_Linear:LM117*", "Regulator_Linear:LM350*", "Regulator_Linear:LM150*"], "kind": "divider", "vref": 1.25, "source": "LM317/LM117/LM350 datasheets, reference voltage VREF"},
+    {"patterns": ["Regulator_Linear:LM337*", "Regulator_Linear:LM137*"], "kind": "divider", "vref": -1.25, "source": "LM337 datasheet, reference voltage VREF"},
+    {"patterns": ["Regulator_Linear:AMS1117", "Regulator_Linear:AMS1117CD", "Regulator_Linear:AMS1117CS", "Regulator_Linear:AP1117-ADJ", "Regulator_Linear:AZ1117*-ADJ", "Regulator_Linear:LM1117*-ADJ", "Regulator_Linear:NCP1117-ADJ*", "Regulator_Linear:TLV1117-ADJ", "Regulator_Linear:LT1117-ADJ"], "kind": "divider", "vref": 1.25, "source": "1117-family datasheets, reference voltage VREF"},
+    {"patterns": ["Regulator_Linear:LT1083-ADJ", "Regulator_Linear:LT1084-ADJ", "Regulator_Linear:LT1085-ADJ", "Regulator_Linear:LT1086-ADJ", "Regulator_Linear:LM1084-ADJ", "Regulator_Linear:LM1085-ADJ", "Regulator_Linear:LT1584-ADJ", "Regulator_Linear:LT1585-ADJ", "Regulator_Linear:LT1587-ADJ"], "kind": "divider", "vref": 1.25, "source": "LT1083-family and LM1084/LM1085 datasheets, reference voltage"},
+    {"patterns": ["Regulator_Linear:LD1086D2TTR", "Regulator_Linear:LD1086DTTR", "Regulator_Linear:LD1086PUR", "Regulator_Linear:LD1086V-DG"], "kind": "divider", "vref": 1.25, "source": "LD1086 datasheet, adjustable version reference voltage"},
+    {"patterns": ["Regulator_Linear:MIC29152W*", "Regulator_Linear:MIC29153W*", "Regulator_Linear:MIC29302*", "Regulator_Linear:MIC29303W*", "Regulator_Linear:MIC29502W*", "Regulator_Linear:MIC29503W*", "Regulator_Linear:MIC29752WT"], "kind": "divider", "vref": 1.24, "source": "MIC29150/29300/29500/29750 datasheet, adjustable reference voltage"},
+    {"patterns": ["Regulator_Linear:MIC5205YM5", "Regulator_Linear:MIC5219YM5", "Regulator_Linear:MIC5219YMM"], "kind": "divider", "vref": 1.242, "source": "MIC5205/MIC5219 datasheets, adjustable reference voltage"},
+    {"patterns": ["Regulator_Linear:LT1761-BYP", "Regulator_Linear:LT1761-SD", "Regulator_Linear:LT1762", "Regulator_Linear:LT1962"], "kind": "divider", "vref": 1.22, "source": "LT1761/LT1762/LT1962 datasheets, ADJ pin voltage"},
+    {"patterns": ["Regulator_Linear:LT1963AEQ", "Regulator_Linear:LT1963EQ"], "kind": "divider", "vref": 1.21, "source": "LT1963 datasheet, ADJ pin voltage"},
+    {"patterns": ["Regulator_Linear:LT1129-ADJ*"], "kind": "divider", "vref": 3.75, "source": "LT1129 datasheet, ADJ pin voltage"},
+    {"patterns": ["Regulator_Linear:LP2980-ADJ"], "kind": "divider", "vref": 1.23, "source": "LP2980-ADJ datasheet, reference voltage"},
+    {"patterns": ["Regulator_Linear:LM2931-ADJ*"], "kind": "divider", "vref": 1.2, "source": "LM2931 datasheet, adjustable reference voltage"},
+    {"patterns": ["Regulator_Linear:TLV75801P*"], "kind": "divider", "vref": 0.55, "source": "TLV758P datasheet, feedback voltage VFB"},
+    {"patterns": ["Regulator_Linear:TPS73101DBV", "Regulator_Linear:TPS73601DBV"], "kind": "divider", "vref": 1.204, "source": "TPS731xx/TPS736xx datasheets, internal reference VREF"},
+    {"patterns": ["Regulator_Linear:TPS74401*", "Regulator_Linear:TPS74801*"], "kind": "divider", "vref": 0.8, "source": "TPS744/TPS748 datasheets, feedback reference VREF"},
+    {"patterns": ["Regulator_Linear:TPS7A4101*"], "kind": "divider", "vref": 1.175, "source": "TPS7A41 datasheet, reference voltage"},
+    {"patterns": ["Regulator_Linear:TPS7A4501*"], "kind": "divider", "vref": 1.21, "source": "TPS7A45 datasheet, ADJ reference voltage"},
+    {"patterns": ["Regulator_Linear:ADP3336*"], "kind": "divider", "vref": 1.178, "source": "ADP3336 datasheet, feedback regulation voltage"},
+    {"patterns": ["Regulator_Linear:SPX3819M5-L"], "kind": "divider", "vref": 1.235, "source": "SPX3819 datasheet, adjustable reference voltage"},
+    {"patterns": ["Regulator_Linear:LT3080*"], "kind": "current_reference", "iset": 1e-05, "source": "LT3080 datasheet, SET pin current ISET"},
+    {"patterns": ["Regulator_Linear:LT3042*", "Regulator_Linear:LT3045*"], "kind": "current_reference", "iset": 0.0001, "source": "LT3042/LT3045 datasheets, SET pin current ISET"}
+  ]
+}

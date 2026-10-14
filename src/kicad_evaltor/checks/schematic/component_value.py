@@ -6,6 +6,7 @@ from typing import ClassVar
 from kicad_evaltor.checks.base import Check, CheckCategory, CheckParams, CheckResult
 from kicad_evaltor.checks.registry import register
 from kicad_evaltor.core.context import DesignContext
+from kicad_evaltor.values import parse_value, values_match
 
 
 @dataclass
@@ -15,12 +16,20 @@ class ComponentValueParams(CheckParams):
     # `validate` exists to reject a missing expectation.
     expected: str | None
     case_sensitive: bool = False
+    numeric: bool = False
+    """Compare as numbers, so ``4k7``, ``4.7k`` and ``4700`` all match."""
+    tolerance: float = 0.0
+    """With ``numeric``, how far apart the values may be, as a fraction."""
 
     def validate(self) -> None:
         if not self.reference:
             raise ValueError("reference is required")
         if self.expected is None:
             raise ValueError("expected value is required")
+        if not 0 <= self.tolerance < 1:
+            raise ValueError("tolerance must be a fraction between 0 and 1")
+        if self.numeric and parse_value(self.expected) is None:
+            raise ValueError(f"expected value {self.expected!r} is not a number")
 
 
 @register
@@ -46,7 +55,19 @@ class ComponentValueCheck(Check[ComponentValueParams]):
         for sym in symbols:
             if sym.reference == params.reference:
                 actual = sym.value
-                if params.case_sensitive:
+                if params.numeric:
+                    want, have = parse_value(expected), parse_value(actual)
+                    if have is None:
+                        return CheckResult.fail(
+                            self.id,
+                            f"Component {params.reference} value '{actual}' is not a number",
+                            reference=params.reference,
+                            expected=params.expected,
+                            actual=actual,
+                        )
+                    assert want is not None  # validate() rejects a non-number
+                    match = values_match(have, want, params.tolerance)
+                elif params.case_sensitive:
                     match = actual == expected
                 else:
                     match = actual.lower() == expected.lower()
