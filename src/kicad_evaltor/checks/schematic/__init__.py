@@ -14,6 +14,7 @@ from kicad_evaltor.checks.schematic.overlaps import (
     TextTextOverlapCheck,
     TextWireOverlapCheck,
 )
+from kicad_evaltor.checks.schematic.pair_polarity import PairPolarityCheck
 from kicad_evaltor.checks.schematic.regulator_output import RegulatorOutputCheck
 from kicad_evaltor.checks.schematic.sheets import (
     SheetCycleCheck,
@@ -33,6 +34,7 @@ __all__ = [
     "ERCRunCheck",
     "FootprintAssignedCheck",
     "NoConnectFloatingCheck",
+    "PairPolarityCheck",
     "RegulatorOutputCheck",
     "SheetCycleCheck",
     "SheetFileMissingCheck",
