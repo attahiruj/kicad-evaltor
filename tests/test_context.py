@@ -1,12 +1,8 @@
-"""Tests for DesignContext path resolution, CLI dispatch and lifecycle.
+"""Tests for DesignContext path resolution, CLI dispatch and caching.
 
-subprocess.Popen, shutil.which and the kipy module are all monkeypatched so no
-KiCad installation is required.
+kicad-cli discovery is monkeypatched, so no KiCad installation is required.
 """
 
-import subprocess
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -14,65 +10,6 @@ import pytest
 from kicad_evaltor.core import context as context_module
 from kicad_evaltor.core.context import DesignContext
 from kicad_evaltor.utils.kicad_cli import SubprocessResult
-
-
-class FakePopen:
-    def __init__(self, cmd, **kwargs):
-        self.cmd = cmd
-        self.kwargs = kwargs
-        self.terminated = False
-        self.killed = False
-        self.wait_raises = None
-        self.waited = False
-
-    def terminate(self):
-        self.terminated = True
-
-    def kill(self):
-        self.killed = True
-
-    def wait(self, timeout=None):
-        self.waited = True
-        if self.wait_raises is not None:
-            raise self.wait_raises
-        return 0
-
-
-@pytest.fixture
-def popen_calls(monkeypatch):
-    created = []
-
-    def fake_popen(cmd, **kwargs):
-        process = FakePopen(cmd, **kwargs)
-        created.append(process)
-        return process
-
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    return created
-
-
-def install_fake_kipy(monkeypatch, ping_error=None):
-    """Provide a kipy stub matching the port/timeout API context.py expects."""
-    instances = []
-
-    class FakeKiCad:
-        def __init__(self, port=5051, timeout=2000):
-            self.port = port
-            self.timeout = timeout
-            self.closed = False
-            instances.append(self)
-
-        def ping(self):
-            if ping_error is not None:
-                raise ping_error
-
-        def close(self):
-            self.closed = True
-
-    module = types.ModuleType("kipy")
-    module.KiCad = FakeKiCad
-    monkeypatch.setitem(sys.modules, "kipy", module)
-    return instances
 
 
 class TestSchematicPath:
@@ -158,10 +95,6 @@ class TestHasBoard:
 
 
 class TestLazyDesignProperties:
-    def test_project_requires_a_path(self):
-        with pytest.raises(ValueError, match="No project, schematic, or board path"):
-            DesignContext().project
-
     def test_schematic_requires_a_schematic(self, tmp_path):
         with pytest.raises(ValueError, match="No schematic available"):
             DesignContext(schematic_path=tmp_path / "missing.kicad_sch").schematic
@@ -198,27 +131,63 @@ class TestLazyDesignProperties:
         with pytest.raises(ValueError, match="Not a KiCad schematic"):
             _ = DesignContext(schematic_path=sch).schematic
 
-    def test_board_is_fetched_once(self, tmp_path):
-        pcb = tmp_path / "a.kicad_pcb"
-        pcb.write_text("x")
+    def test_board_is_read_once_from_the_file(self):
+        from conftest import ESP_BOARD
 
-        fetched = []
-        ctx = DesignContext(board_path=pcb)
-        ctx._kicad = types.SimpleNamespace(
-            get_board=lambda: fetched.append("b") or "board",
-            close=lambda: None,
-        )
+        ctx = DesignContext(board_path=ESP_BOARD)
 
-        assert ctx.board == "board"
-        assert ctx.board == "board"
-        assert len(fetched) == 1
+        assert ctx.board is ctx.board
+        assert len(ctx.board.footprints) == 46
+
+    def test_board_reads_net_classes_from_the_project(self):
+        from conftest import ESP_BOARD
+
+        ctx = DesignContext(project_path=ESP_BOARD.with_suffix(".kicad_pro"))
+
+        assert "VCC" in ctx.board.net_classes.classes
+
+    def test_geometry_without_kicad_python_raises(self, monkeypatch):
+        from conftest import ESP_BOARD
+        from kicad_evaltor import pcbnew_bridge
+        from kicad_evaltor.pcbnew_bridge import GeometryUnavailable
+
+        monkeypatch.setattr(pcbnew_bridge, "find_kicad_python", lambda _cli=None: None)
+        ctx = DesignContext(board_path=ESP_BOARD, kicad_cli_path="/custom/kicad-cli")
+
+        with pytest.raises(GeometryUnavailable, match="KiCad's Python"):
+            ctx.board_geometry()
+
+
+class TestMemo:
+    def test_computes_once_per_key(self):
+        ctx = DesignContext()
+        calls = []
+
+        assert ctx.memo("k", lambda: calls.append(1) or "v") == "v"
+        assert ctx.memo("k", lambda: calls.append(1) or "w") == "v"
+        assert calls == [1]
+
+    def test_an_error_is_not_cached(self):
+        ctx = DesignContext()
+
+        def boom():
+            raise RuntimeError("no")
+
+        with pytest.raises(RuntimeError):
+            ctx.memo("k", boom)
+        assert ctx.memo("k", lambda: "v") == "v"
+
+    def test_close_forgets(self):
+        ctx = DesignContext()
+        ctx.memo("k", lambda: "v")
+        ctx.close()
+
+        assert ctx.memo("k", lambda: "w") == "w"
 
 
 class TestRunKiCadCli:
     def test_reports_missing_binary(self, monkeypatch):
-        import shutil
-
-        monkeypatch.setattr(shutil, "which", lambda _name: None)
+        monkeypatch.setattr(context_module, "find_kicad_cli", lambda: None)
         result = DesignContext().run_kicad_cli(["sch", "erc"])
 
         assert result.returncode == -1
@@ -257,11 +226,9 @@ class TestRunKiCadCli:
         with pytest.raises(ValueError, match="cli_timeout"):
             DesignContext(cli_timeout=0)
 
-    def test_falls_back_to_path_lookup(self, monkeypatch):
-        import shutil
-
+    def test_falls_back_to_discovery(self, monkeypatch):
         seen = {}
-        monkeypatch.setattr(shutil, "which", lambda _name: f"/usr/bin/{_name}")
+        monkeypatch.setattr(context_module, "find_kicad_cli", lambda: Path("/usr/bin/kicad-cli"))
         monkeypatch.setattr(
             context_module,
             "run_kicad_cli",
@@ -269,194 +236,12 @@ class TestRunKiCadCli:
         )
 
         DesignContext().run_kicad_cli(["pcb", "drc"])
-        assert seen["args"] == ["/usr/bin/kicad-cli", "pcb", "drc"]
-
-
-class TestHeadlessServerStartup:
-    def _no_sleep(self, monkeypatch):
-        monkeypatch.setattr(context_module.time, "sleep", lambda _seconds: None)
-
-    def test_raises_when_cli_is_nowhere_to_be_found(self, monkeypatch, tmp_path):
-        import shutil
-
-        monkeypatch.setattr(shutil, "which", lambda _name: None)
-        monkeypatch.setattr(sys, "platform", "linux")
-        with pytest.raises(RuntimeError, match="kicad-cli not found"):
-            DesignContext(schematic_path=tmp_path / "a.kicad_sch")._start_headless_server()
-
-    def test_uses_whichever_cli_path_is_given(self, monkeypatch, popen_calls, tmp_path):
-        self._no_sleep(monkeypatch)
-        install_fake_kipy(monkeypatch)
-
-        ctx = DesignContext(
-            schematic_path=tmp_path / "a.kicad_sch",
-            kicad_cli_path="/custom/kicad-cli",
-        )
-        ctx._start_headless_server()
-
-        assert popen_calls[0].cmd[0] == "/custom/kicad-cli"
-
-    def test_command_includes_port_and_schematic_file(self, monkeypatch, popen_calls, tmp_path):
-        self._no_sleep(monkeypatch)
-        install_fake_kipy(monkeypatch)
-
-        ctx = DesignContext(
-            schematic_path=tmp_path / "a.kicad_sch",
-            kicad_cli_path="/custom/kicad-cli",
-            timeout_ms=1234,
-        )
-        ctx._start_headless_server()
-
-        assert popen_calls[0].cmd == [
-            "/custom/kicad-cli",
-            "api-server",
-            "--port",
-            "5051",
-            "--file",
-            str(tmp_path / "a.kicad_sch"),
-        ]
-
-    def test_project_path_is_preferred_for_the_file_argument(
-        self, monkeypatch, popen_calls, tmp_path
-    ):
-        self._no_sleep(monkeypatch)
-        install_fake_kipy(monkeypatch)
-
-        ctx = DesignContext(
-            project_path=tmp_path / "d.kicad_pro",
-            board_path=tmp_path / "d.kicad_pcb",
-            kicad_cli_path="/custom/kicad-cli",
-        )
-        ctx._start_headless_server()
-
-        assert popen_calls[0].cmd[-1] == str(tmp_path / "d.kicad_pro")
-
-    def test_board_path_used_when_it_is_the_only_input(self, monkeypatch, popen_calls, tmp_path):
-        self._no_sleep(monkeypatch)
-        install_fake_kipy(monkeypatch)
-
-        ctx = DesignContext(board_path=tmp_path / "d.kicad_pcb", kicad_cli_path="/custom/kicad-cli")
-        ctx._start_headless_server()
-
-        assert popen_calls[0].cmd[-1] == str(tmp_path / "d.kicad_pcb")
-
-    def test_file_argument_omitted_without_paths(self, monkeypatch, popen_calls):
-        self._no_sleep(monkeypatch)
-        install_fake_kipy(monkeypatch)
-
-        DesignContext(kicad_cli_path="/custom/kicad-cli")._start_headless_server()
-
-        assert "--file" not in popen_calls[0].cmd
-
-    def test_second_call_does_not_spawn_another_server(self, monkeypatch, popen_calls, tmp_path):
-        self._no_sleep(monkeypatch)
-        install_fake_kipy(monkeypatch)
-
-        ctx = DesignContext(
-            schematic_path=tmp_path / "a.kicad_sch", kicad_cli_path="/custom/kicad-cli"
-        )
-        ctx._start_headless_server()
-        ctx._start_headless_server()
-
-        assert len(popen_calls) == 1
-
-    def test_connects_with_the_configured_port_and_timeout(
-        self, monkeypatch, popen_calls, tmp_path
-    ):
-        self._no_sleep(monkeypatch)
-        instances = install_fake_kipy(monkeypatch)
-
-        ctx = DesignContext(
-            schematic_path=tmp_path / "a.kicad_sch",
-            kicad_cli_path="/custom/kicad-cli",
-            timeout_ms=4321,
-        )
-        ctx._start_headless_server()
-
-        assert instances[-1].port == 5051
-        assert instances[-1].timeout == 100
-
-    def test_raises_when_server_never_becomes_ready(self, monkeypatch, popen_calls, tmp_path):
-        self._no_sleep(monkeypatch)
-        install_fake_kipy(monkeypatch, ping_error=ConnectionError("refused"))
-
-        ctx = DesignContext(
-            schematic_path=tmp_path / "a.kicad_sch", kicad_cli_path="/custom/kicad-cli"
-        )
-        with pytest.raises(RuntimeError, match="Failed to start kicad-cli api-server"):
-            ctx._start_headless_server()
-
-    def test_keeps_trying_until_the_server_answers(self, monkeypatch, popen_calls, tmp_path):
-        self._no_sleep(monkeypatch)
-        attempts = {"n": 0}
-
-        class FlakyKiCad:
-            def __init__(self, port=5051, timeout=2000):
-                pass
-
-            def ping(self):
-                attempts["n"] += 1
-                if attempts["n"] < 5:
-                    raise ConnectionError("refused")
-
-        module = types.ModuleType("kipy")
-        module.KiCad = FlakyKiCad
-        monkeypatch.setitem(sys.modules, "kipy", module)
-
-        ctx = DesignContext(
-            schematic_path=tmp_path / "a.kicad_sch", kicad_cli_path="/custom/kicad-cli"
-        )
-        ctx._start_headless_server()
-
-        assert attempts["n"] == 5
+        assert seen["args"] == [str(Path("/usr/bin/kicad-cli")), "pcb", "drc"]
 
 
 class TestClose:
     def test_close_without_a_server_is_a_no_op(self):
         DesignContext().close()
-
-    def test_close_terminates_the_server_process(self, monkeypatch, popen_calls, tmp_path):
-        monkeypatch.setattr(context_module.time, "sleep", lambda _seconds: None)
-        install_fake_kipy(monkeypatch)
-
-        ctx = DesignContext(
-            schematic_path=tmp_path / "a.kicad_sch", kicad_cli_path="/custom/kicad-cli"
-        )
-        ctx._start_headless_server()
-        ctx.close()
-
-        assert popen_calls[0].terminated
-        assert popen_calls[0].waited
-        assert ctx._kicad_instance.process is None
-        assert ctx._kicad_instance.started is False
-
-    def test_close_kills_a_process_that_will_not_exit(self, monkeypatch, popen_calls, tmp_path):
-        monkeypatch.setattr(context_module.time, "sleep", lambda _seconds: None)
-        install_fake_kipy(monkeypatch)
-
-        ctx = DesignContext(
-            schematic_path=tmp_path / "a.kicad_sch", kicad_cli_path="/custom/kicad-cli"
-        )
-        ctx._start_headless_server()
-        popen_calls[0].wait_raises = subprocess.TimeoutExpired(cmd="kicad-cli", timeout=5)
-        ctx.close()
-
-        assert popen_calls[0].killed
-
-    def test_close_closes_the_kicad_handle(self):
-        ctx = DesignContext()
-        ctx._kicad = types.SimpleNamespace(close=lambda: None)
-        ctx.close()
-        assert ctx._kicad is None
-
-    def test_close_swallows_errors_from_the_kicad_handle(self):
-        def boom():
-            raise RuntimeError("already gone")
-
-        ctx = DesignContext()
-        ctx._kicad = types.SimpleNamespace(close=boom)
-        ctx.close()
-        assert ctx._kicad is None
 
 
 class TestContextManager:
@@ -465,32 +250,6 @@ class TestContextManager:
         sch.write_text("x")
         with DesignContext(schematic_path=sch) as ctx:
             assert ctx.has_schematic()
-
-    def test_exit_closes_the_server(self, monkeypatch, popen_calls, tmp_path):
-        monkeypatch.setattr(context_module.time, "sleep", lambda _seconds: None)
-        install_fake_kipy(monkeypatch)
-
-        with DesignContext(
-            schematic_path=tmp_path / "a.kicad_sch",
-            kicad_cli_path="/custom/kicad-cli",
-        ) as ctx:
-            ctx._start_headless_server()
-
-        assert popen_calls[0].terminated
-
-    def test_exit_runs_when_the_body_raises(self, monkeypatch, popen_calls, tmp_path):
-        monkeypatch.setattr(context_module.time, "sleep", lambda _seconds: None)
-        install_fake_kipy(monkeypatch)
-
-        with DesignContext(
-            schematic_path=tmp_path / "a.kicad_sch",
-            kicad_cli_path="/custom/kicad-cli",
-        ) as ctx:
-            ctx._start_headless_server()
-            with pytest.raises(ValueError, match="boom"):
-                raise ValueError("boom")
-
-        assert popen_calls[0].terminated
 
 
 def test_path_arguments_are_coerced_to_path_objects(tmp_path):

@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Board evaluation, built and tested against a real KiCad 10 board
+(`examples/demo_circuit/esp_data_logger_board`).
+
+### Added
+
+- `kicad_evaltor.board_file`: `load_board` reads `.kicad_pcb` with no KiCad
+  installed. It covers footprints (fields, attributes, schematic path,
+  reference text style), pads (net, pin function and type, drill), tracks and
+  arcs with their lengths, vias, zones, the stackup, and net classes and
+  design rules from the project file. `NetClasses.effective` resolves KiCad
+  10's composite classes such as `"VCC,Default"` by priority. Per-net track
+  lengths match pcbnew's exactly.
+- The board reader also reads files from KiCad 9 and earlier, which name nets
+  by code on tracks, vias and zones (`(net 3)`).
+- `kicad_evaltor.pcbnew_bridge`: `dump_board` runs KiCad's own `pcbnew` under
+  KiCad's bundled Python. It returns courtyards, pad outlines, the board
+  outline, zone fill after a refill, pour connectivity, text boxes and each
+  net's class. `DesignContext.board_geometry()` runs it once per context.
+- `kicad_evaltor.utils.kicad_python` finds KiCad's interpreter, or uses
+  `$KICAD_PYTHON`. `kicad_evaltor.utils.kicad_cli.find_kicad_cli` finds
+  `kicad-cli` in the standard install folders when it is not on `PATH`.
+- `kicad_evaltor.board_connectivity`: `pad_to_pad_length` gives the shortest
+  copper route between two pads.
+- `kicad_evaltor.diff_pairs`: `find_diff_pairs` and `kicad_complement` (KiCad's
+  pair naming rule), and `measure_pair`. The pair gap it measures matches
+  KiCad's DRC clearance on the example board.
+- `FileBoard.net_length` counts a net as KiCad's DRC and length tuning do:
+  tracks, plus via height when the project's "use via height in length" is on,
+  plus pad-to-die lengths. A via counts only between the outermost layers its
+  tracks use. Every net on the example board matches KiCad's DRC to 0.0001 mm.
+- `pcb.via.rules` holds microvias to KiCad's microvia minimums
+  (`min_microvia_drill`, `min_microvia_diameter`), not the through-via ones.
+- New board checks:
+  - DRC-backed: `pcb.routing.complete`, `pcb.schematic_parity`,
+    `pcb.footprint.matches_library`, `pcb.silk.over_copper`,
+    `pcb.silk.overlap`.
+  - Placement: `pcb.footprint.on_board`, `pcb.footprint.placement`,
+    `pcb.footprint.near` (with a `decoupling` mode that pairs every
+    power-input pin with a capacitor), `pcb.board.outline`,
+    `pcb.mounting_holes`, `pcb.footprint.matches_schematic`.
+  - Routing: `pcb.net.length_match` (max skew and/or a target length),
+    `pcb.net.vias`, `pcb.net.layers`.
+  - Differential pairs: `pcb.diff_pair` checks skew, track width, coupled
+    gap, uncoupled length and via count. Gap and width default to the net
+    class's diff-pair settings. Pairs are found by name with KiCad's own rule
+    (`+`/`-` and `P`/`N`, trailing digits and underscores skipped), by custom
+    `suffixes`, by `pattern`, or named outright.
+  - `pcb.tuning.rules` reports KiCad's own `length_out_of_range`,
+    `skew_out_of_range` and diff-pair DRC findings from custom
+    `.kicad_dru` rules.
+  - Copper: `pcb.trace.current_capacity` (IPC-2221), `pcb.via.rules`,
+    `pcb.thermal.vias`, `pcb.plane.coverage`.
+  - Silkscreen: `pcb.silk.reference_visible`, `pcb.text.off_board`.
+  - Fabrication: `pcb.fab.exports`, `pcb.fab.position_file`.
+- `DesignContext.memo(key, compute)` keeps one answer per context. DRC runs once
+  and every DRC-backed check filters that one report.
+- `kicad_evaltor.edit` edits boards too: `remove_net_tracks`, `remove_footprint`
+  and `move_footprint`. They are for making failing cases from a real board.
+- `examples/pcb.py` runs the board checks on the example board.
+
+### Changed
+
+- `pcb.drc` counts unrouted connections and schematic parity issues, not only
+  rule violations. Each finding names its `source`. New options:
+  `include_types`, `exclude_types` and `refill_zones` (on by default, as in
+  KiCad's DRC dialog).
+- `pcb.trace.length` measures a net (`net=`) or one pad-to-pad route
+  (`from_pad=`/`to_pad=`), against min/max or `target_length_mm` ±
+  `tolerance_mm`, with lengths counted as KiCad counts them (`include_vias`). `reference=` is rejected with a pointer to these.
+  It used to add up every net the footprint touched, which measured nothing
+  useful.
+- `pcb.footprint.overlap` reads KiCad's courtyard overlaps from DRC. With
+  `min_clearance_mm` it also measures gaps between real courtyard outlines,
+  not bounding boxes that include silkscreen text.
+- `pcb.power.pour` measures the filled area in mm² after a refill (it used to
+  square a length), can be limited to one `layer`, and by default requires the
+  pour to connect to a pad of its net.
+- `pcb.trace.width` can select a `netclass`, or hold each track to its own net
+  class (`match_netclass=True`). Findings give net, layer, ends and width.
+- `pcb.footprint.exists`, `pcb.trace.width`, `pcb.power.pour` and
+  `project.schematic_pcb_consistency` read the board file. They no longer need
+  a running KiCad.
+- `DesignContext` is file-backed throughout. `board` is a `FileBoard`.
+  `headless` and `timeout_ms` are still accepted, and ignored.
+
+### Removed
+
+- The `kicad-python` (kipy) dependency, and with it `DesignContext.kicad`,
+  `DesignContext.project` and the `kicad-cli api-server` startup. KiCad 10 has
+  no IPC API server, so that path could not run.
+
+### Fixed
+
+- Net names KiCad stores escaped, like `Net-(U2-PS{slash}SYNC)`, are read as
+  KiCad shows them (`Net-(U2-PS/SYNC)`), from both the board file and pcbnew.
+  Such a net used to show no tracks.
+- `parse_drc_report` reads KiCad 10's `unconnected_items` and
+  `schematic_parity` lists. Reading only `violations` passed a board with
+  nothing routed.
+- DRC no longer passes the schematic path after `--schematic-parity`, which is a
+  flag with no value. KiCad finds the schematic by project name.
+- Board paths are made absolute before kicad-cli runs from its scratch folder.
+  A relative path used to fail with "Failed to load board".
+- `project.schematic_pcb_consistency` no longer reports power symbols, or parts
+  marked "exclude from board", as missing from the board.
+
 ## [0.4.0] - 2026-10-17
 
 ### Added

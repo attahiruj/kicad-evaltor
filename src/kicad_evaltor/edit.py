@@ -1,4 +1,4 @@
-"""Small, faithful edits to a schematic file, for building test fixtures.
+"""Small, faithful edits to a schematic or board file, for building test fixtures.
 
 A fixture is easiest to make by changing a reference design: put a different
 part in, change a value, embed the real library symbol. The edit has to leave
@@ -8,7 +8,11 @@ embedded copy is not exactly what the library holds, ERC raises
 are always embedded from :class:`~kicad_evaltor.symbol_library.SymbolLibraries`
 with ``extends`` resolved.
 
-Everything works on a schematic's s-expression tree in memory.
+The same goes for a board: a failing case is made by taking a real, clean board
+and breaking one thing (delete a net's tracks, remove a part, move a part onto
+another), so everything else about it stays exactly as KiCad wrote it.
+
+Everything works on the file's s-expression tree in memory.
 :func:`load_document` and :func:`save_document` read and write it, and nothing
 here touches a file it was not asked to write.
 """
@@ -18,19 +22,20 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from kicad_evaltor.board_file import _net_name, net_codes
 from kicad_evaltor.sexpr import Quoted, SExpr, child, children, dumps, head, parse, value_of
 from kicad_evaltor.symbol_library import SymbolLibraries, symbol_signature
 
 
 class EditError(ValueError):
-    """The edit cannot be made to this schematic."""
+    """The edit cannot be made to this schematic or board."""
 
 
 def load_document(path: str | Path) -> list[SExpr]:
-    """A schematic file's s-expression tree, ready to edit."""
+    """A schematic or board file's s-expression tree, ready to edit."""
     document = parse(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(document, list) or head(document) != "kicad_sch":
-        raise EditError(f"Not a KiCad schematic: {path}")
+    if not isinstance(document, list) or head(document) not in ("kicad_sch", "kicad_pcb"):
+        raise EditError(f"Not a KiCad schematic or board: {path}")
     return document
 
 
@@ -230,3 +235,47 @@ def _rebuild_pins(node: list[SExpr], numbers: list[str]) -> None:
         for number in numbers
     ]
     node[insert_at:insert_at] = pins
+
+
+def board_footprint(document: list[SExpr], reference: str) -> list[SExpr]:
+    """The placed footprint whose Reference is ``reference``."""
+    for node in children(document, "footprint"):
+        if _property(node, "Reference") == reference:
+            return node
+    raise EditError(f"No footprint {reference} on the board")
+
+
+def remove_footprint(document: list[SExpr], reference: str) -> None:
+    """Delete a footprint from the board, leaving its tracks dangling."""
+    document.remove(board_footprint(document, reference))
+
+
+def move_footprint(document: list[SExpr], reference: str, x: float, y: float) -> None:
+    """Move a footprint's origin to ``(x, y)`` mm, keeping its rotation.
+
+    Pad and field positions are stored relative to the footprint, so they move
+    with it; tracks do not, which is what makes this a useful breakage.
+    """
+    at = child(board_footprint(document, reference), "at")
+    if at is None:
+        raise EditError(f"Footprint {reference} has no position")
+    at[1:3] = [_number(x), _number(y)]
+
+
+def remove_net_tracks(document: list[SExpr], net: str) -> int:
+    """Delete every track segment and arc on ``net``; returns how many went."""
+    codes = net_codes(document)
+    doomed = [
+        node
+        for node in document
+        if isinstance(node, list)
+        and head(node) in ("segment", "arc")
+        and _net_name(child(node, "net"), codes) == net
+    ]
+    for node in doomed:
+        document.remove(node)
+    return len(doomed)
+
+
+def _number(value: float) -> str:
+    return f"{value:.6f}".rstrip("0").rstrip(".")

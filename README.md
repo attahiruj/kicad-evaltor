@@ -2,11 +2,12 @@
 
 A Python library for validating KiCad designs programmatically. Describe the
 properties a design is supposed to have — reference designators, values,
-connectivity, footprint assignment, ERC results, and whether the sheet is
-readable — and run them as a test suite.
+connectivity, footprint assignment, ERC and DRC results, routing, placement,
+copper and fabrication outputs, and whether the sheet is readable — and run them
+as a test suite.
 
 Works against **KiCad 10 and later**. It does not need the KiCad IPC API server,
-which KiCad 10 removed.
+which KiCad 10 removed, or a running KiCad.
 
 [![CI](https://github.com/attahiruj/kicad-evaltor/actions/workflows/ci.yml/badge.svg)](https://github.com/attahiruj/kicad-evaltor/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/kicad-evaltor.svg)](https://pypi.org/project/kicad-evaltor/)
@@ -23,20 +24,25 @@ pip install kicad-evaltor
 
 Most checks need nothing but the file itself. The schematic reader parses
 `.kicad_sch` directly, so symbols, fields, wires, labels and text geometry all
-work with no KiCad present.
+work with no KiCad present. The board reader does the same for `.kicad_pcb`:
+footprints, pads, tracks, vias, net classes and the stackup.
 
-A `kicad-cli` binary is needed only for the checks that shell out:
+Where KiCad already has the answer, the library asks KiCad instead of guessing:
 
 | Check | Needs |
 |-------|-------|
-| `sch.components.connected`, `sch.regulator.output_voltage`, `sch.pair.polarity` | `kicad-cli sch export netlist` |
+| `sch.components.connected`, `sch.regulator.output_voltage`, `sch.pair.polarity`, `pcb.footprint.matches_schematic` | `kicad-cli sch export netlist` |
 | `sch.erc` | `kicad-cli sch erc` |
+| `pcb.drc`, `pcb.routing.complete`, `pcb.schematic_parity`, `pcb.footprint.overlap`, `pcb.footprint.matches_library`, `pcb.silk.over_copper`, `pcb.silk.overlap`, `pcb.tuning.rules` | `kicad-cli pcb drc` (run once per context, shared) |
+| `pcb.fab.exports`, `pcb.fab.position_file` | `kicad-cli pcb export` |
+| `pcb.board.outline`, `pcb.footprint.on_board`, `pcb.footprint.near`, `pcb.power.pour`, `pcb.plane.coverage`, `pcb.thermal.vias`, `pcb.text.off_board`; also `pcb.trace.length` pad to pad, `pcb.trace.width` by net class, `pcb.diff_pair` with gap or width from the net class, `pcb.footprint.placement` with `at_edge`, `pcb.via.rules` with `allow_via_in_pad=False` | `pcbnew`, run under KiCad's bundled Python |
 | `sch.symbol.matches_library` | KiCad's symbol libraries (found next to `kicad-cli`, or via `KICAD10_SYMBOL_DIR`) |
 
-Without it those checks report an error and the rest of the suite still runs.
-On Windows, KiCad is not put on `PATH` by default; pass
-`kicad_cli_path="C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"` or let
-`DesignContext` find it.
+Without them those checks report an error and the rest of the suite still runs.
+On Windows and macOS, KiCad is not put on `PATH`; `DesignContext` finds
+`kicad-cli` and KiCad's Python in the standard install folders, or pass
+`kicad_cli_path="C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"`. Set
+`KICAD_PYTHON` to use a different interpreter that can import `pcbnew`.
 
 ## Quick start
 
@@ -98,6 +104,17 @@ python examples/visual.py --json                          # the same failures as
 python examples/visual.py path/to/your.kicad_sch          # any other sheet
 ```
 
+[`examples/pcb.py`](examples/pcb.py) runs the board checks against a real
+KiCad 10 board,
+[`examples/demo_circuit/esp_data_logger_board/`](examples/demo_circuit/esp_data_logger_board/):
+an ESP32-C6 data logger whose DRC is clean. It also prints three things on that
+board that DRC does not report: tracks narrower than their net class asks for, a
+thermal pad with no vias, and hidden reference designators.
+
+```bash
+python examples/pcb.py
+```
+
 ## Checks
 
 ### Schematic
@@ -115,6 +132,75 @@ python examples/visual.py path/to/your.kicad_sch          # any other sheet
 | `sch.pair.polarity` | `PairPolarityCheck` | Each half of a differential pair (USB, CAN, `+`/`-`) reaches the same half at the far part, never the other |
 | `sch.erc` | `ERCRunCheck` | Runs ERC via `kicad-cli` and filters by severity; `timeout` sets how long it may run |
 
+### Board
+
+Board checks read the `.kicad_pcb` for what it stores as values and ask KiCad
+for the rest. DRC runs once per context, and every DRC-backed check reads its
+own findings from that one report. Geometry (courtyards, pad shapes, the board
+outline, zone fill) comes from `pcbnew`, also once per context.
+
+| Check ID | Class | Description |
+|----------|-------|-------------|
+| `pcb.drc` | `DRCRunCheck` | KiCad's DRC: rule violations, **unrouted connections** and **schematic parity**, filtered by severity and `include_types` / `exclude_types` |
+| `pcb.routing.complete` | `RoutingCompleteCheck` | Nothing is left unrouted, grouped by net |
+| `pcb.schematic_parity` | `SchematicParityCheck` | The board matches its schematic: missing or extra footprints, mismatched values, net conflicts |
+| `pcb.footprint.exists` | `FootprintExistsCheck` | A footprint exists, by reference or `lib_id` |
+| `pcb.footprint.matches_schematic` | `FootprintMatchesSchematicCheck` | Each footprint is the one its symbol names, with a pad for every pin |
+| `pcb.footprint.matches_library` | `FootprintMatchesLibraryCheck` | Footprints are unchanged copies of their library footprints |
+| `pcb.footprint.overlap` | `FootprintOverlapCheck` | No courtyards overlap, optionally with a minimum gap |
+| `pcb.footprint.on_board` | `FootprintOnBoardCheck` | Every courtyard lies inside the board outline |
+| `pcb.footprint.placement` | `FootprintPlacementCheck` | A part's side, rotation, position, or closeness to the board edge |
+| `pcb.footprint.near` | `FootprintNearCheck` | A part is within a distance of another part or pin; `decoupling="U1"` pairs each power-input pin with a capacitor itself |
+| `pcb.board.outline` | `BoardOutlineCheck` | `Edge.Cuts` is closed and the right size |
+| `pcb.mounting_holes` | `MountingHolesCheck` | Number, drill size and edge distance of mounting holes |
+| `pcb.trace.width` | `TraceWidthCheck` | Track widths on a net, a part's nets or a net class; `match_netclass=True` holds each track to its own class |
+| `pcb.trace.length` | `TraceLengthCheck` | A net's length, or the shortest route between two pads, within min/max or a target ± tolerance |
+| `pcb.trace.current_capacity` | `CurrentCapacityCheck` | Tracks are wide enough for a current (IPC-2221, as in KiCad's calculator) |
+| `pcb.net.length_match` | `LengthMatchCheck` | A pair or bus of nets is length matched (max skew, and/or a target length ± tolerance) |
+| `pcb.diff_pair` | `DiffPairCheck` | Differential pairs, found by name as KiCad finds them (`+`/`-`, `P`/`N`, or your own suffixes): skew, track width, coupled gap, uncoupled length, via count |
+| `pcb.tuning.rules` | `TuningRulesCheck` | KiCad's own length, skew and diff-pair DRC rules from a `.kicad_dru` file |
+| `pcb.net.vias` | `NetViasCheck` | How many vias a net uses |
+| `pcb.net.layers` | `NetLayersCheck` | Which copper layers a net is routed on |
+| `pcb.via.rules` | `ViaRulesCheck` | Via drill, diameter and annular ring (defaulting to the board's own rules), and via-in-pad |
+| `pcb.thermal.vias` | `ThermalViasCheck` | Vias inside a part's thermal pad |
+| `pcb.power.pour` | `PowerPourCheck` | A net has a pour that is filled, big enough, and connected to its pads |
+| `pcb.plane.coverage` | `PlaneCoverageCheck` | How much of a layer a net's pour covers |
+| `pcb.silk.reference_visible` | `ReferenceVisibleCheck` | Every footprint prints a readable reference on silkscreen |
+| `pcb.silk.over_copper` | `SilkOverCopperCheck` | No silkscreen is clipped by pads or the board edge |
+| `pcb.silk.overlap` | `SilkOverlapCheck` | No silkscreen items overlap |
+| `pcb.text.off_board` | `TextOffBoardCheck` | No silkscreen text hangs off the board |
+| `pcb.fab.exports` | `FabExportsCheck` | Gerbers (every copper layer and the edge), drill and position files can be made |
+| `pcb.fab.position_file` | `PositionFileCheck` | The pick-and-place file lists every SMD part |
+| `project.schematic_pcb_consistency` | `ConsistencyCheck` | Every schematic part is on the board, and the reverse |
+
+DRC-backed checks refill zones first by default (`refill_zones=True`), as
+KiCad's DRC dialog does; the file is never rewritten.
+
+#### Lengths and differential pairs
+
+Lengths are counted the way KiCad's DRC and length tuning count them: track
+length (arcs as arcs), plus each via's height when the project has "use via
+height in length" on (the default), plus pad-to-die lengths. A via counts only
+between the outermost layers its tracks use, as KiCad optimises it. On the
+example board every net's length matches KiCad's own DRC to 0.0001 mm. Pass
+`include_vias=False` for track length alone.
+
+Differential pairs are found by name using KiCad's own rule
+(`DRC_ENGINE::MatchDpSuffix`): trailing digits and underscores are skipped, then
+the name must end in `+`/`-` or `P`/`N`. So `USB_D+`/`USB_D-`, `TX_P`/`TX_N` and
+`LVDS_P0`/`LVDS_N0` are pairs. Give `suffixes=[["_DP", "_DM"], ["_p", "_n"]]`
+for other conventions, `pattern="*USB*"` to pick some, or `pairs=[...]` to name
+them outright.
+
+```python
+DiffPairCheck(pattern="*USB*", max_skew_mm=0.15, max_uncoupled_mm=3)  # gap/width from net class
+DiffPairCheck(pairs=[["ETH_TX+", "ETH_TX-"]], gap_mm=0.15, width_mm=0.2, max_via_mismatch=0)
+LengthMatchCheck(pattern="/DDR_DQ*", target_length_mm=42, tolerance_mm=0.5)
+```
+
+KiCad's DRC can check pairs, lengths and skew as well, but only for rules a
+project writes in a `.kicad_dru` file; `pcb.tuning.rules` reports those.
+
 ### Building blocks
 
 The checks above are thin layers over modules you can use directly:
@@ -127,7 +213,11 @@ The checks above are thin layers over modules you can use directly:
 | `kicad_evaltor.regulators` | `regulator_output(netlist, "U3")`: a regulator's output voltage and how it was worked out; `register_regulator` for parts it does not know |
 | `kicad_evaltor.pin_roles` | `usb_polarity("UD+") == "D+"`, and `PairRule` for other pairs |
 | `kicad_evaltor.symbol_library` | Read KiCad libraries, flatten `extends`, compare symbols by signature |
-| `kicad_evaltor.edit` | Build fixtures: `swap_symbol`, `embed_symbol` and `set_symbol_property` on a reference design, then `save_document` |
+| `kicad_evaltor.board_file` | `load_board("x.kicad_pcb")`: footprints, pads (with nets and pin types), tracks with lengths, vias, zones, stackup, and net classes resolved as KiCad resolves them |
+| `kicad_evaltor.pcbnew_bridge` | `dump_board(path)`: courtyards, pad outlines, board outline, zone fill and connectivity from KiCad's own `pcbnew` |
+| `kicad_evaltor.board_connectivity` | `pad_to_pad_length(...)`: the shortest copper route between two pads |
+| `kicad_evaltor.diff_pairs` | `find_diff_pairs(board.nets)` by KiCad's naming rule, and `measure_pair` for lengths, widths, gap and coupling |
+| `kicad_evaltor.edit` | Build fixtures: `swap_symbol`, `embed_symbol` and `set_symbol_property` on a reference design; `remove_net_tracks`, `remove_footprint` and `move_footprint` on a board; then `save_document` |
 
 ```python
 from kicad_evaltor import Connectivity, regulator_output
@@ -308,6 +398,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions, and
 
 - [Architecture](docs/architecture.md) — how parsing, geometry and the check
   registry fit together.
+- [PCB evaluation](docs/pcb-plan.md) — the decisions behind the board checks,
+  and what is still open.
 - [Contributing](CONTRIBUTING.md) — setup, gates, and conventions.
 
 ## License

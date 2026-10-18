@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -31,6 +33,36 @@ ERC, DRC and netlist export on a large but valid design can take minutes on a
 busy host, and abandoning one early reports a tooling failure as if it were a
 design failure, so the default errs long. Pass ``timeout`` to tighten it.
 """
+
+
+def find_kicad_cli() -> Path | None:
+    """kicad-cli on ``PATH``, else in KiCad's standard install folders, newest first.
+
+    KiCad does not put itself on ``PATH`` on Windows or macOS, so the install
+    folders are searched too.
+    """
+    found = shutil.which("kicad-cli") or shutil.which("kicad-cli.exe")
+    if found:
+        return Path(found)
+    candidates: list[Path] = []
+    if sys.platform == "win32":
+        for var in ("ProgramFiles", "ProgramFiles(x86)"):
+            base = os.environ.get(var)
+            if base and (Path(base) / "KiCad").is_dir():
+                candidates.extend(
+                    sorted(
+                        (Path(base) / "KiCad").glob("*/bin/kicad-cli.exe"),
+                        key=lambda p: _version_key(p.parent.parent.name),
+                        reverse=True,
+                    )
+                )
+    elif sys.platform == "darwin":
+        candidates.append(Path("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"))
+    return next((c for c in candidates if c.is_file()), None)
+
+
+def _version_key(name: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", name)) or (0,)
 
 
 def run_kicad_cli(
@@ -97,17 +129,39 @@ def parse_erc_report(json_output: str) -> list[dict[str, Any]]:
     return _violations_from(data)
 
 
-def parse_drc_report(json_output: str) -> list[dict[str, Any]]:
-    """Extract DRC violations from a KiCad DRC JSON report.
+DRC_SOURCES = ("violations", "unconnected_items", "schematic_parity")
+"""The three lists a KiCad DRC report keeps its findings in.
 
-    Unlike ERC, this one is not per sheet: KiCad 10 still writes one top-level
-    ``violations`` list. Unparseable input yields an empty list.
+``violations`` holds rule breaches. A connection that is not routed is not in
+it: KiCad 10 lists those under ``unconnected_items``, and differences from the
+schematic under ``schematic_parity``. A parser that reads only ``violations``
+passes a board with nothing routed on it.
+"""
+
+
+def parse_drc_report(json_output: str) -> list[dict[str, Any]]:
+    """Every finding in a KiCad DRC JSON report, each tagged with its ``source``.
+
+    ``source`` names the list it came from (see :data:`DRC_SOURCES`). Reports
+    from KiCad 8 and 9, which have only the one list, read the same way.
+    Unparseable input yields an empty list.
     """
     try:
         data = json.loads(json_output)
     except json.JSONDecodeError:
         return []
-    return _violations_from(data)
+    if not isinstance(data, dict):
+        return []
+    found: list[dict[str, Any]] = []
+    for source in DRC_SOURCES:
+        entries = data.get(source)
+        if isinstance(entries, list):
+            found.extend(
+                {**entry, "source": source} for entry in entries if isinstance(entry, dict)
+            )
+    if not found and "violations" not in data:
+        found = [{**v, "source": "violations"} for v in _violations_from(data)]
+    return found
 
 
 def _violations_from_sheets(sheets: list[Any]) -> list[dict[str, Any]]:
@@ -151,7 +205,7 @@ def violation_details(violation: Mapping[str, Any]) -> dict[str, Any]:
     ``items[*].pos``; there is no ``message`` key and no ``at`` key, so reading
     those names yields ``None`` for every violation in the report. Projecting
     here keeps one spelling for both checks. ``sheet`` is present only for ERC,
-    which is the per-sheet report.
+    which is the per-sheet report, and ``source`` only for DRC.
     """
     details: dict[str, Any] = {
         "type": violation.get("type"),
@@ -161,6 +215,8 @@ def violation_details(violation: Mapping[str, Any]) -> dict[str, Any]:
     }
     if "sheet" in violation:
         details["sheet"] = violation["sheet"]
+    if "source" in violation:
+        details["source"] = violation["source"]
     return details
 
 

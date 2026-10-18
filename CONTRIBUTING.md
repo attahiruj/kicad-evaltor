@@ -27,13 +27,18 @@ uv run pytest -m "not integration"
 ```
 
 All four must be clean. The `integration` marker is excluded because those
-tests drive a live KiCad through `kipy`; run them locally with
-`uv run pytest -m integration` if you have KiCad available.
+tests run the real `kicad-cli` and KiCad's bundled Python (`pcbnew`); run them
+locally with `uv run pytest -m integration` if you have KiCad 10 installed.
 
-mypy is gated on `src` only. `checks/pcb/` and `schematic/consistency.py` are
-excluded because the PCB checks are not implemented, and `core/context.py` is
-excluded because it calls into `kipy`, which targets a newer KiCad than we run
-against. Both are annotated in `pyproject.toml` with the reason.
+mypy is gated on `src` only. The one exception is `_pcbnew_dump.py`, which runs
+under KiCad's interpreter and imports `pcbnew`, for which there are no stubs.
+
+Board checks are tested against a real board,
+`examples/demo_circuit/esp_data_logger_board`, not invented ones. The unit tests
+replay KiCad's DRC reports and pcbnew geometry for it, and for copies with one
+thing broken, from `tests/fixtures/pcb`. After changing that board or upgrading
+KiCad, re-record them with `uv run python tools/record_pcb_fixtures.py`; the
+integration tests fail when a recording no longer matches what KiCad says.
 
 ## Versioning
 

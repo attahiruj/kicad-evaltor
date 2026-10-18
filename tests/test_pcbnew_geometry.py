@@ -10,10 +10,11 @@ the interpreter running the suite) and asserts against known-good values.
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
+
+from kicad_evaltor.utils.kicad_python import find_kicad_python
 
 FOOTPRINT_LIB = Path(
     os.environ.get("KICAD_FOOTPRINT_LIB")
@@ -28,38 +29,6 @@ EXPECTED_COURTYARD_H_MM = 1.99
 NM_PER_MM = 1_000_000
 
 
-def find_kicad_python() -> Path | None:
-    """Locate the CPython that KiCad ships, which is where pcbnew is importable.
-
-    KiCad's own interpreter is searched first: under a virtualenv the
-    co-located python.exe is the venv's, which has no pcbnew.
-    """
-    candidates: list[Path] = []
-    if sys.platform == "win32":
-        for var in ("ProgramFiles", "ProgramFiles(x86)"):
-            base = os.environ.get(var)
-            if not base:
-                continue
-            root = Path(base) / "KiCad"
-            if not root.is_dir():
-                continue
-            candidates.extend(sorted(root.glob("*/bin/python.exe"), reverse=True))
-    else:
-        candidates.extend(
-            Path(p)
-            for p in (
-                "/usr/lib/kicad/bin/python3",
-                "/usr/bin/python3",
-                "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3",
-            )
-        )
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
-
-
 def run_pcbnew(code: str, tmp_path: Path) -> dict:
     """Execute a snippet under KiCad's Python and parse its RESULT_JSON line."""
     kicad_python = find_kicad_python()
@@ -67,7 +36,7 @@ def run_pcbnew(code: str, tmp_path: Path) -> dict:
     script.write_text(code, encoding="utf-8")
 
     result = subprocess.run(
-        [str(kicad_python), str(script)],
+        [str(kicad_python), "-I", str(script)],
         capture_output=True,
         text=True,
         timeout=300,

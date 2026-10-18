@@ -1,0 +1,68 @@
+{
+ "$schema": "https://schemas.kicad.org/drc.v1.json",
+ "coordinate_units": "mm",
+ "ignored_checks": [
+  {
+   "description": "Footprint has no courtyard defined",
+   "key": "missing_courtyard"
+  },
+  {
+   "description": "Track endpoint not centered on via",
+   "key": "track_not_centered_on_via"
+  },
+  {
+   "description": "Tuning profile track geometries",
+   "key": "tuning_profile_track_geometries"
+  },
+  {
+   "description": "Footprint doesn't match symbol's footprint filters",
+   "key": "footprint_filters_mismatch"
+  },
+  {
+   "description": "Silkscreen clearance",
+   "key": "silk_overlap"
+  },
+  {
+   "description": "Silkscreen clipped by board edge",
+   "key": "silk_edge_clearance"
+  },
+  {
+   "description": "Footprint component type doesn't match footprint pads",
+   "key": "footprint_type_mismatch"
+  }
+ ],
+ "included_severities": [
+  "error",
+  "warning",
+  "exclusion"
+ ],
+ "kicad_version": "10.0.1",
+ "schematic_parity": [],
+ "source": "esp_data_logger_board.kicad_pcb",
+ "unconnected_items": [
+  {
+   "description": "Missing connection between items",
+   "items": [
+    {
+     "description": "Pad 15 [/SD_CLK] of U1 on F.Cu",
+     "pos": {
+      "x": 122.625,
+      "y": 66.4
+     },
+     "uuid": "7ac587ad-e9a7-44b6-9073-5c89ae54432b"
+    },
+    {
+     "description": "Pad 5 [/SD_CLK] of J3 on F.Cu",
+     "pos": {
+      "x": 122.845,
+      "y": 82.31
+     },
+     "uuid": "04a256e6-95c9-4bf2-af7e-b7572064e8ca"
+    }
+   ],
+   "severity": "error",
+   "type": "unconnected_items"
+  }
+ ],
+ "violations": []
+}

@@ -1,30 +1,37 @@
 from __future__ import annotations
 
-import subprocess
-import time
-from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
-    from kipy import KiCad
-    from kipy.board import Board
-    from kipy.project import Project
-    from kipy.schematic import Schematic
+    from kicad_evaltor.board_file import FileBoard
+    from kicad_evaltor.pcbnew_bridge import BoardGeometry
 
 from kicad_evaltor.hierarchy import SchematicTree, tree_for
 from kicad_evaltor.schematic_file import FileSchematic, FileSymbol, load_schematic
-from kicad_evaltor.utils.kicad_cli import DEFAULT_CLI_TIMEOUT, SubprocessResult, run_kicad_cli
+from kicad_evaltor.utils.kicad_cli import (
+    DEFAULT_CLI_TIMEOUT,
+    SubprocessResult,
+    find_kicad_cli,
+    run_kicad_cli,
+)
 
-
-@dataclass
-class KiCadInstance:
-    process: subprocess.Popen | None = None
-    port: int = 5051
-    started: bool = False
+T = TypeVar("T")
 
 
 class DesignContext:
+    """One design under test: its files, and the KiCad tools that read them.
+
+    Everything is file-backed. The schematic and board are parsed directly;
+    ``kicad-cli`` runs netlist export, ERC, DRC and fabrication exports; and
+    board geometry comes from ``pcbnew`` under KiCad's bundled Python. KiCad 10
+    has no IPC API server, so nothing here needs a running KiCad.
+
+    ``headless`` and ``timeout_ms`` belonged to the removed IPC connection. They
+    are still accepted, and ignored, so existing callers keep working.
+    """
+
     def __init__(
         self,
         project_path: str | Path | None = None,
@@ -40,46 +47,19 @@ class DesignContext:
         self._project_path = Path(project_path) if project_path else None
         self._schematic_path = Path(schematic_path) if schematic_path else None
         self._board_path = Path(board_path) if board_path else None
-        self._headless = headless
         self._kicad_cli_path = kicad_cli_path
-        self._timeout_ms = timeout_ms
         self._cli_timeout = cli_timeout
 
-        self._kicad_instance = KiCadInstance()
-        self._kicad: KiCad | None = None
-        self._project: Project | None = None
-        # Schematic access is file-backed (FileSchematic); the kipy Schematic
-        # type stays in the union because the IPC path can still supply one.
-        self._schematic: FileSchematic | Schematic | None = None
-        self._board: Board | None = None
+        self._schematic: FileSchematic | None = None
+        self._board: FileBoard | None = None
+        self._memo: dict[Any, Any] = {}
 
     @property
-    def kicad(self) -> KiCad:
-        if self._kicad is None:
-            self._kicad = self._connect_kicad()
-        return self._kicad
-
-    @property
-    def project(self) -> Project:
-        if self._project is None:
-            if self._project_path:
-                self._project = self.kicad.get_project(self._project_path)
-            elif self._schematic_path:
-                self._project = self.kicad.get_project(self._schematic_path)
-            elif self._board_path:
-                self._project = self.kicad.get_project(self._board_path)
-            else:
-                raise ValueError("No project, schematic, or board path provided")
-        return self._project
-
-    @property
-    def schematic(self) -> Any:
-        """Schematic data, preferring the file and falling back to IPC.
+    def schematic(self) -> FileSchematic:
+        """The root schematic, read from ``.kicad_sch``.
 
         Symbols, values, fields and footprints are plain s-expressions, so they
-        are read from ``.kicad_sch`` directly. That keeps schematic checks
-        working with no KiCad running, and only needs the IPC server for
-        connectivity.
+        are read directly; only the netlist needs ``kicad-cli``.
         """
         if self._schematic is None:
             if not self.has_schematic():
@@ -89,24 +69,21 @@ class DesignContext:
             # happens to contain the link.
             self._schematic = load_schematic(
                 self.schematic_path,
-                cli_path=self._kicad_cli_path,
+                cli_path=self.kicad_cli_path,
                 project_dir=self.project_dir,
                 cli_timeout=self._cli_timeout,
             )
         return self._schematic
 
     def sheet_tree(self) -> SchematicTree | None:
-        """Every sheet the schematic draws, or None when it is not file-backed.
+        """Every sheet the schematic draws.
 
         A KiCad schematic is a tree of files, and ``schematic`` is only its root.
         Anything that has to see the whole design -- a component check looking
         for a reference anywhere, a layout check that accepts a ``sheet``
         selector -- goes through here instead of reading one file.
         """
-        schematic = self.schematic
-        if not isinstance(schematic, FileSchematic):
-            return None
-        return tree_for(schematic)
+        return tree_for(self.schematic)
 
     def sheet_symbols(self) -> list[FileSymbol]:
         """Every placed symbol in the design, each tagged with the sheet it sits on.
@@ -118,12 +95,7 @@ class DesignContext:
         sheets' coordinates are two coordinate spaces.
         """
         tree = self.sheet_tree()
-        if tree is not None:
-            return [symbol for _, symbol in tree.iter_symbols()]
-        # Not file-backed, so there is no tree to walk. The IPC schematic is flat
-        # anyway, and its symbols are the whole design.
-        schematic = self.schematic
-        return list(schematic.get_symbols()) if schematic is not None else []
+        return [symbol for _, symbol in tree.iter_symbols()] if tree is not None else []
 
     @property
     def project_dir(self) -> Path | None:
@@ -135,12 +107,59 @@ class DesignContext:
         return self._project_path.parent if self._project_path else None
 
     @property
-    def board(self) -> Board:
+    def board(self) -> FileBoard:
+        """The board, read from ``.kicad_pcb`` with its project's net classes."""
         if self._board is None:
             if not self.has_board():
                 raise ValueError("No board available")
-            self._board = self.kicad.get_board()
+            from kicad_evaltor.board_file import load_board
+
+            project = self._project_path or self.board_path.with_suffix(".kicad_pro")
+            self._board = load_board(self.board_path, project_path=project)
         return self._board
+
+    def board_geometry(self, *, fill_zones: bool = True) -> BoardGeometry:
+        """Courtyards, pads, outline, zone fill and connectivity from pcbnew.
+
+        Computed once per context, by one run of KiCad's bundled Python. Raises
+        :class:`~kicad_evaltor.pcbnew_bridge.GeometryUnavailable` when KiCad's
+        Python cannot be found or cannot read the board.
+        """
+        from kicad_evaltor.pcbnew_bridge import GeometryUnavailable, dump_board
+
+        def compute() -> BoardGeometry | GeometryUnavailable:
+            try:
+                return dump_board(
+                    self.board_path,
+                    cli_path=self.kicad_cli_path,
+                    fill_zones=fill_zones,
+                    timeout=self._cli_timeout,
+                )
+            except GeometryUnavailable as exc:
+                # Kept: a missing or hanging pcbnew stays so for the run, and a
+                # dozen geometry checks should not each wait out the timeout.
+                return exc
+
+        found = self.memo(("board_geometry", fill_zones), compute)
+        if isinstance(found, GeometryUnavailable):
+            raise found
+        return found
+
+    def memo(self, key: Any, compute: Callable[[], T]) -> T:
+        """``compute()`` once per ``key`` for the life of this context.
+
+        Several checks need the same expensive answer (a DRC report, the board
+        geometry); this keeps it to one kicad-cli or pcbnew run. A raised error
+        is not cached, so the next caller tries again; a caller that wants a
+        failure retried when it is returned rather than raised calls ``forget``.
+        """
+        if key not in self._memo:
+            self._memo[key] = compute()
+        return self._memo[key]  # type: ignore[no-any-return]
+
+    def forget(self, key: Any) -> None:
+        """Drop one remembered answer, so the next ``memo`` computes it again."""
+        self._memo.pop(key, None)
 
     @property
     def schematic_path(self) -> Path:
@@ -172,74 +191,13 @@ class DesignContext:
             return self._project_path.with_suffix(".kicad_pcb").exists()
         return False
 
-    def _connect_kicad(self) -> KiCad:
-        from kipy import KiCad
-
-        if self._headless:
-            self._start_headless_server()
-
-        return KiCad(port=self._kicad_instance.port, timeout=self._timeout_ms)
-
-    def _start_headless_server(self) -> None:
-        from kipy import KiCad
-
-        if self._kicad_instance.started:
-            return
-
-        cli_path = self._kicad_cli_path
-        if cli_path is None:
-            import shutil
-
-            cli_path = shutil.which("kicad-cli")
-            if cli_path is None:
-                import sys
-
-                if sys.platform == "win32":
-                    for base in [
-                        r"C:\Program Files\KiCad\10.0\bin",
-                        r"C:\Program Files\KiCad\9.0\bin",
-                        r"C:\Program Files\KiCad\8.0\bin",
-                    ]:
-                        candidate = Path(base) / "kicad-cli.exe"
-                        if candidate.exists():
-                            cli_path = str(candidate)
-                            break
-
-        if cli_path is None:
-            raise RuntimeError("kicad-cli not found. Install KiCad or provide kicad_cli_path.")
-
-        file_path = None
-        if self._project_path:
-            file_path = str(self._project_path)
-        elif self._schematic_path:
-            file_path = str(self._schematic_path)
-        elif self._board_path:
-            file_path = str(self._board_path)
-
-        cmd = [cli_path, "api-server", "--port", str(self._kicad_instance.port)]
-        if file_path:
-            cmd.extend(["--file", file_path])
-
-        self._kicad_instance.process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        self._kicad_instance.started = True
-
-        for _ in range(50):
-            try:
-                k = KiCad(port=self._kicad_instance.port, timeout=100)
-                k.ping()
-                return
-            except Exception:
-                time.sleep(0.1)
-
-        raise RuntimeError("Failed to start kicad-cli api-server")
-
     @property
     def kicad_cli_path(self) -> str | None:
-        """The kicad-cli this context was given, or None to look on ``PATH``."""
+        """The kicad-cli to use: the one given, else one found on ``PATH`` or in
+        KiCad's standard install folders, else None."""
+        if self._kicad_cli_path is None:
+            found = find_kicad_cli()
+            self._kicad_cli_path = str(found) if found else None
         return self._kicad_cli_path
 
     @property
@@ -249,11 +207,7 @@ class DesignContext:
 
     def run_kicad_cli(self, args: list[str], *, timeout: float | None = None) -> SubprocessResult:
         """Run kicad-cli, allowing ``timeout`` seconds or the context's default."""
-        cli_path = self._kicad_cli_path
-        if cli_path is None:
-            import shutil
-
-            cli_path = shutil.which("kicad-cli")
+        cli_path = self.kicad_cli_path
         return (
             run_kicad_cli([cli_path, *args], timeout=timeout or self._cli_timeout)
             if cli_path
@@ -265,21 +219,8 @@ class DesignContext:
         )
 
     def close(self) -> None:
-        if self._kicad is not None:
-            try:
-                self._kicad.close()
-            except Exception:
-                pass
-            self._kicad = None
-
-        if self._kicad_instance.process is not None:
-            self._kicad_instance.process.terminate()
-            try:
-                self._kicad_instance.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._kicad_instance.process.kill()
-            self._kicad_instance.process = None
-            self._kicad_instance.started = False
+        """Drop cached results. Nothing else is held open."""
+        self._memo.clear()
 
     def __enter__(self) -> DesignContext:
         return self

@@ -28,6 +28,20 @@ checks/             one module per check, registered by dotted id
 core/runner.py      TestReport
 ```
 
+A board takes a shorter path, because KiCad answers its geometric questions:
+
+```
+.kicad_pcb ──► sexpr.py ──► board_file.py       FileBoard: footprints, pads, tracks,
+                                                vias, zones, stackup, net classes
+          ──► kicad-cli pcb drc                  rule violations, unrouted items, parity
+          ──► pcbnew_bridge.py ──► _pcbnew_dump.py (KiCad's Python)
+                                                courtyards, pad outlines, outline,
+                                                zone fill, connectivity
+                    │
+                    ▼
+              checks/pcb/  ──►  core/runner.py
+```
+
 ## Layers
 
 ### `sexpr.py`
@@ -220,13 +234,17 @@ Ids are a public interface; never renumber one.
 kinds they pair up. Each takes an optional `sheet` selector and runs once per
 selected sheet through `_over_sheets`, totalling the findings and qualifying
 labels with the sheet name. `schematic/sheets.py` backs the four `sch.sheet.*`
-checks. `pcb/` is not implemented — see below.
+checks. `pcb/` holds the board checks; `pcb/_common.py` runs DRC once per
+context and every DRC-backed check filters that one report, and
+`pcb/drc_rules.py` holds the checks that are one DRC rule each.
 
 ### `core/`
 
-`DesignContext` owns the design, finds `kicad-cli`, and runs it as a subprocess
-for netlist, ERC and DRC. `TestRunner` takes a list of checks and produces a
-`TestReport`.
+`DesignContext` owns the design, finds `kicad-cli` and KiCad's Python, and runs
+them as subprocesses for netlist, ERC, DRC, fabrication exports and board
+geometry. `memo(key, compute)` keeps one answer per context, which is how a
+suite of board checks costs one DRC run and one pcbnew run. `TestRunner` takes a
+list of checks and produces a `TestReport`.
 
 `kicad-cli` is located on `PATH` first, then in the standard install locations,
 since KiCad does not add itself to `PATH` on Windows.
@@ -252,9 +270,18 @@ never asked that way, because two sheets' coordinates are two coordinate spaces.
 
 ## Boundaries worth respecting
 
-- **`kicad-cli` is only for netlist, ERC and DRC.** KiCad 10 removed
-  `kicad-cli api-server`, so nothing depends on the IPC API. Symbols, values,
-  fields and text geometry all come from parsing the file.
+- **Ask KiCad what KiCad already knows.** KiCad 10 removed
+  `kicad-cli api-server`, so nothing depends on the IPC API. What a file stores
+  as values (symbols, fields, footprints, tracks, vias) is parsed. Rule checks
+  come from `kicad-cli` (ERC, DRC), and board geometry from `pcbnew` run under
+  KiCad's bundled Python. Our own geometry is only for questions KiCad has no
+  API for, such as proximity and pad-to-pad length, and it measures the shapes
+  pcbnew reports rather than rebuilding them.
+- **All `pcbnew` access goes through `pcbnew_bridge.py`.** SWIG bindings are
+  slated to give way to the IPC API; when they do, only that module changes.
+- **Resolve paths before `report_workspace`.** It changes the working directory,
+  so a relative board path passed to kicad-cli inside it points into the scratch
+  folder.
 - **No global or project KiCad configuration is ever modified.** Checks read;
   they do not rewrite project settings.
 - **`report_workspace` changes process-wide CWD** and is not thread-safe. Do not
@@ -265,11 +292,17 @@ never asked that way, because two sheets' coordinates are two coordinate spaces.
 - **A sheet that cannot be read is reported, never raised.** `sch.sheet.file_missing`
   owns that finding; every other check carries on with what did load.
 
-## Not implemented
+## Board data sources
 
-`checks/pcb/` registers six checks (`pcb.footprint.exists`,
-`pcb.footprint.overlap`, `pcb.trace.width`, `pcb.trace.length`,
-`pcb.power.pour`, `pcb.drc`) plus `project.schematic_pcb_consistency`. They are
-scaffolding: they appear in the registry and construct, but they read a
-`FootprintInstance` that `models/` does not define, so they cannot run. They are
-excluded from the mypy gate. Board work is a separate effort.
+| Data | Source | Why |
+|------|--------|-----|
+| Footprints, pads, nets, tracks, vias, zones, stackup | `board_file.py` | Plain values in the file; no KiCad needed |
+| Net classes and design rules | `.kicad_pro` via `board_file.py`; per-net class names from pcbnew | KiCad 10 assigns several classes to a net (`"VCC,Default"`) by patterns and schematic directives; pcbnew applies them, `NetClasses.effective` resolves the values by priority |
+| Courtyards, pad outlines, board outline, text boxes | pcbnew | Real geometry: arcs, rounded rectangles, custom pads |
+| Zone fill and pour connectivity | pcbnew, after `ZONE_FILLER` | The fill saved in a file can be stale |
+| Rule violations, unrouted connections, schematic parity, footprint vs library | `kicad-cli pcb drc` | KiCad's DRC engine is the authority |
+| Gerber, drill and position files | `kicad-cli pcb export` | What a fab house would receive |
+
+pcbnew's zone filler crashes on a board created in memory with
+`CreateEmptyBoard`; a board loaded from disk with `LoadBoard` fills correctly,
+which is how `_pcbnew_dump.py` uses it.

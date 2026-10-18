@@ -1,12 +1,14 @@
-"""Shared test doubles for the kipy (KiCad IPC) API surface that checks consume.
+"""Shared test doubles and fixtures.
 
-Checks only touch a narrow slice of the kipy objects (reference/lib_id/value on
-symbols, net/pads/tracks/zones on boards), so plain fakes are enough to drive
-every branch without a running KiCad instance.
+Schematic checks only touch a narrow slice of a symbol (reference, lib_id,
+value, fields), so plain fakes drive every branch. Board checks are tested
+against the real example board instead: its file, and the pcbnew geometry and
+DRC reports recorded from it under ``tests/fixtures/pcb``.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -81,6 +83,33 @@ def kicad_cli_supports(subcommand: str, cli: Path) -> bool:
 # The sheet the suite's expectations are written against. A second demo sheet,
 # visual.kicad_sch, lives in the same folder, so this one is picked by name
 # rather than by whichever file happens to sort first.
+ESP_BOARD = (
+    Path(__file__).resolve().parent.parent
+    / "examples"
+    / "demo_circuit"
+    / "esp_data_logger_board"
+    / "esp_data_logger_board.kicad_pcb"
+)
+"""A real KiCad 10 board (ESP32-C6 data logger), DRC-clean, with its schematic."""
+
+PCB_RECORDINGS = Path(__file__).resolve().parent / "fixtures" / "pcb"
+"""KiCad's DRC reports and pcbnew geometry for that board and broken copies of
+it, recorded by ``tools/record_pcb_fixtures.py``."""
+
+
+def recorded_drc(variant: str = "base") -> SubprocessResult:
+    """A canned kicad-cli result carrying the DRC report recorded for ``variant``."""
+    return cli_result(stdout=(PCB_RECORDINGS / f"{variant}.drc.json").read_text("utf-8"))
+
+
+def recorded_geometry(variant: str = "base") -> Any:
+    from kicad_evaltor.pcbnew_bridge import geometry_from_dict
+
+    return geometry_from_dict(
+        json.loads((PCB_RECORDINGS / f"{variant}.geometry.json").read_text("utf-8"))
+    )
+
+
 DEMO_SCHEMATIC_STEM = "simple_circuit"
 
 
@@ -141,13 +170,6 @@ def kicad_cli_required(kicad_cli: Path | None) -> Path:
     if kicad_cli is None:
         pytest.skip("kicad-cli not found on PATH or in a standard KiCad install")
     return kicad_cli
-
-
-@pytest.fixture(scope="session")
-def api_server_available(kicad_cli) -> bool:
-    if kicad_cli is None:
-        return False
-    return kicad_cli_supports("api-server", kicad_cli)
 
 
 # ---------------------------------------------------------------- sheet trees
@@ -306,15 +328,6 @@ def _pins(target: object) -> tuple[str, ...]:
     return ("+3.3V", "GND")
 
 
-def mm(value: float) -> int:
-    """Lift a millimeter measurement into the nanometer units kipy reports."""
-    return int(round(value * 1_000_000))
-
-
-def mm2(value: float) -> int:
-    return int(round(value * 1_000_000_000_000))
-
-
 class Text:
     def __init__(self, value: str) -> None:
         self.value = value
@@ -401,116 +414,23 @@ class FakeSchematic:
         return self._netlist
 
 
-class FakePad:
-    def __init__(self, pad_number: str = "1", net: int | None = None) -> None:
-        self.pad_number = pad_number
-        self.net = net
-
-
 class FakeFootprint:
-    def __init__(
-        self,
-        reference: str,
-        lib_id: str = "Resistor_SMD:R_0805",
-        value: str = "",
-        pads: list[FakePad] | None = None,
-    ) -> None:
+    """Just enough of a board footprint for the schematic/board consistency check."""
+
+    def __init__(self, reference: str, lib_id: str = "Resistor_SMD:R_0805") -> None:
         self.reference = reference
         self.lib_id = lib_id
-        self.value = value
-        self.pads = pads or []
-
-
-class FakeTrack:
-    """A track exposing length through get_length(), like kipy's Track."""
-
-    def __init__(self, net: int, width: int, length: int = 0) -> None:
-        self.net = net
-        self.width = width
-        self._length = length
-
-    def get_length(self) -> int:
-        return self._length
-
-
-class LengthAttrItem:
-    """A net item exposing length as a plain attribute instead of a method."""
-
-    def __init__(self, length: int) -> None:
-        self.length = length
-
-
-class LengthlessItem:
-    """A net item with neither a length attribute nor a get_length method."""
-
-
-class FakeNet:
-    def __init__(self, name: str, net_code: int) -> None:
-        self.name = name
-        self.net_code = net_code
-
-
-class FakeZone:
-    def __init__(self, net_name: str, areas: list[int] | None = None, raises: bool = False) -> None:
-        self.net_name = net_name
-        self._areas = areas or []
-        self._raises = raises
-
-    def get_filled_polygons(self) -> list[Any]:
-        if self._raises:
-            raise RuntimeError("zone fill failed")
-        return [SimpleNS(area=a) for a in self._areas]
-
-
-class BBox:
-    def __init__(self, min_x: int, min_y: int, max_x: int, max_y: int) -> None:
-        self.min_x = min_x
-        self.min_y = min_y
-        self.max_x = max_x
-        self.max_y = max_y
-
-    @classmethod
-    def from_mm(cls, min_x: float, min_y: float, max_x: float, max_y: float) -> BBox:
-        return cls(mm(min_x), mm(min_y), mm(max_x), mm(max_y))
 
 
 class FakeBoard:
-    def __init__(
-        self,
-        footprints: list[FakeFootprint] | None = None,
-        tracks: list[Any] | None = None,
-        nets: list[FakeNet] | None = None,
-        zones: list[FakeZone] | None = None,
-        items_by_net: dict[int, list[Any]] | None = None,
-        bboxes: dict[str, BBox] | None = None,
-    ) -> None:
-        self._footprints = footprints or []
-        self._tracks = tracks or []
-        self._nets = nets or []
-        self._zones = zones or []
-        self._items_by_net = items_by_net or {}
-        self._bboxes = bboxes or {}
+    """A board that is only a list of footprints. Board checks use the real
+    ``FileBoard`` read from the example board instead."""
+
+    def __init__(self, footprints: list[FakeFootprint] | None = None) -> None:
+        self.footprints = footprints or []
 
     def get_footprints(self) -> list[FakeFootprint]:
-        return self._footprints
-
-    def get_tracks(self) -> list[Any]:
-        return self._tracks
-
-    def get_zones(self) -> list[FakeZone]:
-        return self._zones
-
-    def get_net_by_name(self, name: str) -> FakeNet | None:
-        return next((n for n in self._nets if n.name == name), None)
-
-    def get_footprint_by_reference(self, reference: str) -> FakeFootprint | None:
-        return next((f for f in self._footprints if f.reference == reference), None)
-
-    def get_items_by_net(self, net_code: int) -> list[Any]:
-        return self._items_by_net.get(net_code, [])
-
-    def get_item_bounding_box(self, footprint: FakeFootprint) -> BBox:
-        return self._bboxes[footprint.reference]
+        return list(self.footprints)
 
 
 def cli_result(returncode: int = 0, stdout: str = "", stderr: str = "") -> SubprocessResult:
@@ -529,13 +449,16 @@ class FakeContext:
     def __init__(
         self,
         schematic: FakeSchematic | None = None,
-        board: FakeBoard | None = None,
+        board: Any = None,
+        geometry: Any = None,
         cli_results: SubprocessResult | list[SubprocessResult] | None = None,
         schematic_path: str = "design.kicad_sch",
         board_path: str = "design.kicad_pcb",
     ) -> None:
         self._schematic = schematic
         self._board = board
+        self._geometry = geometry
+        self._memo: dict[Any, Any] = {}
         self._schematic_path = Path(schematic_path)
         self._board_path = Path(board_path)
         if cli_results is None:
@@ -566,9 +489,25 @@ class FakeContext:
         return self.schematic.get_symbols()
 
     @property
-    def board(self) -> FakeBoard:
+    def board(self) -> Any:
         assert self._board is not None
         return self._board
+
+    def board_geometry(self, *, fill_zones: bool = True) -> Any:
+        """Recorded pcbnew geometry, or GeometryUnavailable as with no KiCad."""
+        if self._geometry is None:
+            from kicad_evaltor.pcbnew_bridge import GeometryUnavailable
+
+            raise GeometryUnavailable("KiCad's Python (with pcbnew) was not found")
+        return self._geometry
+
+    def memo(self, key: Any, compute: Any) -> Any:
+        if key not in self._memo:
+            self._memo[key] = compute()
+        return self._memo[key]
+
+    def forget(self, key: Any) -> None:
+        self._memo.pop(key, None)
 
     @property
     def schematic_path(self) -> Path:

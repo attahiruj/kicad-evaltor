@@ -329,16 +329,19 @@ class TestTraceLengthCheck:
         from kicad_evaltor.checks.pcb.trace_length import TraceLengthParams
 
         with pytest.raises(ValueError):
-            TraceLengthParams(reference="R1", max_length_mm=0)
+            TraceLengthParams(net="GND", max_length_mm=0)
 
         with pytest.raises(ValueError):
-            TraceLengthParams(reference="R1", max_length_mm=10, min_length_mm=-1)
+            TraceLengthParams(net="GND", max_length_mm=10, min_length_mm=-1)
 
-        params = TraceLengthParams(reference="R1", max_length_mm=50)
-        params.validate()
+        with pytest.raises(ValueError):
+            TraceLengthParams(from_pad="U1.1", max_length_mm=10)
 
-        params = TraceLengthParams(reference="R1", max_length_mm=50, min_length_mm=10)
-        params.validate()
+        with pytest.raises(ValueError, match="no longer supported"):
+            TraceLengthParams(reference="R1", max_length_mm=50)
+
+        TraceLengthParams(net="GND", max_length_mm=50).validate()
+        TraceLengthParams(from_pad="U1.1", to_pad="C1.2", max_length_mm=50).validate()
 
 
 class TestFootprintOverlapCheck:

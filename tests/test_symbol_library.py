@@ -310,7 +310,7 @@ class TestEditing:
 
     def test_load_rejects_other_files(self, tmp_path):
         bad = tmp_path / "x.kicad_sch"
-        bad.write_text("(kicad_pcb)", encoding="utf-8")
+        bad.write_text("(kicad_wks)", encoding="utf-8")
         with pytest.raises(EditError):
             load_document(bad)
 

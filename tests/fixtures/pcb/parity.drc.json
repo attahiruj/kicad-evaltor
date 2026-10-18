@@ -1,0 +1,67 @@
+{
+ "$schema": "https://schemas.kicad.org/drc.v1.json",
+ "coordinate_units": "mm",
+ "ignored_checks": [
+  {
+   "description": "Footprint has no courtyard defined",
+   "key": "missing_courtyard"
+  },
+  {
+   "description": "Track endpoint not centered on via",
+   "key": "track_not_centered_on_via"
+  },
+  {
+   "description": "Tuning profile track geometries",
+   "key": "tuning_profile_track_geometries"
+  },
+  {
+   "description": "Footprint doesn't match symbol's footprint filters",
+   "key": "footprint_filters_mismatch"
+  },
+  {
+   "description": "Silkscreen clearance",
+   "key": "silk_overlap"
+  },
+  {
+   "description": "Silkscreen clipped by board edge",
+   "key": "silk_edge_clearance"
+  },
+  {
+   "description": "Footprint component type doesn't match footprint pads",
+   "key": "footprint_type_mismatch"
+  }
+ ],
+ "included_severities": [
+  "error",
+  "warning",
+  "exclusion"
+ ],
+ "kicad_version": "10.0.1",
+ "schematic_parity": [
+  {
+   "description": "Missing footprint R13 (10K)",
+   "items": [],
+   "severity": "warning",
+   "type": "missing_footprint"
+  }
+ ],
+ "source": "esp_data_logger_board.kicad_pcb",
+ "unconnected_items": [],
+ "violations": [
+  {
+   "description": "Track has unconnected end",
+   "items": [
+    {
+     "description": "Track [Net-(J3-DAT2)] on F.Cu, length 0.9617 mm",
+     "pos": {
+      "x": 127.245,
+      "y": 80.78
+     },
+     "uuid": "e5f77c43-0034-4e84-937e-ff069732a28e"
+    }
+   ],
+   "severity": "warning",
+   "type": "track_dangling"
+  }
+ ]
+}

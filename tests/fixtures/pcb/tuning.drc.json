@@ -1,0 +1,128 @@
+{
+ "$schema": "https://schemas.kicad.org/drc.v1.json",
+ "coordinate_units": "mm",
+ "ignored_checks": [
+  {
+   "description": "Footprint has no courtyard defined",
+   "key": "missing_courtyard"
+  },
+  {
+   "description": "Track endpoint not centered on via",
+   "key": "track_not_centered_on_via"
+  },
+  {
+   "description": "Tuning profile track geometries",
+   "key": "tuning_profile_track_geometries"
+  },
+  {
+   "description": "Footprint doesn't match symbol's footprint filters",
+   "key": "footprint_filters_mismatch"
+  },
+  {
+   "description": "Silkscreen clearance",
+   "key": "silk_overlap"
+  },
+  {
+   "description": "Silkscreen clipped by board edge",
+   "key": "silk_edge_clearance"
+  },
+  {
+   "description": "Footprint component type doesn't match footprint pads",
+   "key": "footprint_type_mismatch"
+  }
+ ],
+ "included_severities": [
+  "error",
+  "warning",
+  "exclusion"
+ ],
+ "kicad_version": "10.0.1",
+ "schematic_parity": [],
+ "source": "esp_data_logger_board.kicad_pcb",
+ "unconnected_items": [],
+ "violations": [
+  {
+   "description": "Track length out of range (rule 'sd_clk_length' max length 10.0000 mm; actual 17.1402 mm)",
+   "items": [
+    {
+     "description": "Pad 15 [/SD_CLK] of U1 on F.Cu",
+     "pos": {
+      "x": 122.625,
+      "y": 66.4
+     },
+     "uuid": "7ac587ad-e9a7-44b6-9073-5c89ae54432b"
+    },
+    {
+     "description": "Pad 5 [/SD_CLK] of J3 on F.Cu",
+     "pos": {
+      "x": 122.845,
+      "y": 82.31
+     },
+     "uuid": "04a256e6-95c9-4bf2-af7e-b7572064e8ca"
+    }
+   ],
+   "severity": "error",
+   "type": "length_out_of_range"
+  },
+  {
+   "description": "Skew between tracks out of range (rule 'sd_bus_skew' max skew 5.0000 mm; actual -22.0315 mm; target net length 39.1718 mm (from /SD_CD); actual 17.1402 mm)",
+   "items": [
+    {
+     "description": "Track [/SD_CLK] on F.Cu, length 0.9000 mm",
+     "pos": {
+      "x": 122.845,
+      "y": 82.31
+     },
+     "uuid": "9045db1f-0f61-4633-9512-6b20321f8bdb"
+    }
+   ],
+   "severity": "error",
+   "type": "skew_out_of_range"
+  },
+  {
+   "description": "Skew between tracks out of range (rule 'sd_bus_skew' max skew 5.0000 mm; actual -9.1218 mm; target net length 39.1718 mm (from /SD_CD); actual 30.0499 mm)",
+   "items": [
+    {
+     "description": "Via [/SD_CS] on F.Cu - B.Cu",
+     "pos": {
+      "x": 126.4,
+      "y": 77.35
+     },
+     "uuid": "bf6d775c-1658-442a-a1c6-0cc6db49842d"
+    }
+   ],
+   "severity": "error",
+   "type": "skew_out_of_range"
+  },
+  {
+   "description": "Skew between tracks out of range (rule 'sd_bus_skew' max skew 5.0000 mm; actual -10.8351 mm; target net length 39.1718 mm (from /SD_CD); actual 28.3366 mm)",
+   "items": [
+    {
+     "description": "Via [/SD_MISO] on F.Cu - B.Cu",
+     "pos": {
+      "x": 117.1,
+      "y": 62.05
+     },
+     "uuid": "614c5054-87b2-4b51-8cbb-ef7be6d74957"
+    }
+   ],
+   "severity": "error",
+   "type": "skew_out_of_range"
+  },
+  {
+   "description": "Skew between tracks out of range (rule 'sd_bus_skew' max skew 5.0000 mm; actual -18.6524 mm; target net length 39.1718 mm (from /SD_CD); actual 20.5193 mm)",
+   "items": [
+    {
+     "description": "Track [/SD_MOSI] on F.Cu, length 2.2750 mm",
+     "pos": {
+      "x": 127.925,
+      "y": 76.5
+     },
+     "uuid": "eadb82dd-98b8-44cb-a94e-93fc598db4a2"
+    }
+   ],
+   "severity": "error",
+   "type": "skew_out_of_range"
+  }
+ ]
+}

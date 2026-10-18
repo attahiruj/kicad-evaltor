@@ -5,12 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "kicad-evaltor"
 version = "0.4.0"
-description = "Test and validate KiCad schematics: component values, connectivity, ERC results and sheet layout"
+description = "Test and validate KiCad designs: schematic values, connectivity, ERC, DRC, board layout and fabrication outputs"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
-    "kicad-python>=0.8",
-]
+dependencies = []
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -89,19 +87,7 @@ namespace_packages = true
 explicit_package_bases = true
 mypy_path = ["src", "tests"]
 
-# The PCB checks reference a `FootprintInstance` that `models/` does not define,
-# so they cannot run yet. Their mypy errors are silenced here rather than left to
-# fail the gate.
+# Runs under KiCad's bundled interpreter, where pcbnew lives; it has no stubs.
 [[tool.mypy.overrides]]
-module = [
-    "kicad_evaltor.checks.pcb.*",
-    "kicad_evaltor.checks.schematic.consistency",
-]
+module = "kicad_evaltor._pcbnew_dump"
 ignore_errors = true
-
-# `kipy` 0.8 targets KiCad 11's socket API. KiCad 10 has no
-# `kicad-cli api-server`, so these call sites cannot type-check. Only the
-# boundary codes are silenced so real mistakes elsewhere in the module still fail.
-[[tool.mypy.overrides]]
-module = "kicad_evaltor.core.context"
-disable_error_code = ["arg-type", "call-arg", "attr-defined"]

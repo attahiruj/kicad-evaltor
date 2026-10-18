@@ -2,11 +2,11 @@
 
 Split into two tiers:
 
-* ``TestKicadCliReports`` runs real sch erc / pcb drc invocations against the
-  demo circuit. These only need the kicad-cli executable.
-* ``TestKipyApiServer`` needs a live kicad-cli api-server to read schematic and
-  board objects. It is skipped, with the reason reported, when the installed
-  kicad-cli has no ``api-server`` subcommand.
+* ``TestKicadCliReports`` runs real sch erc invocations against the demo
+  circuit. These only need the kicad-cli executable.
+* ``TestERCAndDRCChecksAgainstRealKicadCli`` runs the checks themselves.
+
+Board checks are exercised against a real board in ``test_pcb_integration.py``.
 """
 
 import json
@@ -16,15 +16,13 @@ from pathlib import Path
 import pytest
 
 from kicad_evaltor.checks.base import TestStatus
-from kicad_evaltor.checks.pcb.drc_check import DRCRunCheck
 from kicad_evaltor.checks.schematic.erc_check import ERCRunCheck
 from kicad_evaltor.core.context import DesignContext
 from kicad_evaltor.core.runner import TestRunner
-from kicad_evaltor.utils.kicad_cli import parse_drc_report, parse_erc_report
+from kicad_evaltor.utils.kicad_cli import parse_erc_report
 from conftest import demo_schematic_path
 
 DEMO_SCHEMATIC = demo_schematic_path()
-DEMO_BOARD = DEMO_SCHEMATIC.with_suffix(".kicad_pcb")
 
 
 pytestmark = pytest.mark.integration
@@ -50,18 +48,6 @@ def run_cli(cli: Path, args: list[str], cwd: Path) -> subprocess.CompletedProces
         check=False,
         cwd=cwd,
     )
-
-
-@pytest.fixture
-def demo_board_required() -> Path:
-    """Skip rather than fail when the demo board fixture is absent.
-
-    The board is a large binary-ish artefact that is not always present in a
-    checkout; the schematic half of the demo does not depend on it.
-    """
-    if not DEMO_BOARD.exists():
-        pytest.skip(f"demo board fixture missing: {DEMO_BOARD}")
-    return DEMO_BOARD
 
 
 class TestKicadCliReports:
@@ -151,37 +137,6 @@ class TestKicadCliReports:
         assert result.details["violations"][0]["description"]
         assert result.details["violations"][0]["sheet"] == "/"
 
-    def test_drc_json_report_has_no_drc_violation_key(
-        self, kicad_cli_required, demo_board_required, tmp_path
-    ):
-        report = tmp_path / "drc.json"
-        result = run_cli(
-            kicad_cli_required,
-            ["pcb", "drc", "--format", "json", "-o", str(report), str(demo_board_required)],
-            tmp_path,
-        )
-
-        assert result.returncode == 0
-        data = json.loads(report.read_text(encoding="utf-8"))
-        # parse_drc_report() looks for "drc_violation"; KiCad emits "violations".
-        assert "drc_violation" not in data
-        assert parse_drc_report(report.read_text(encoding="utf-8")) == []
-
-    def test_demo_board_really_has_a_drc_error(
-        self, kicad_cli_required, demo_board_required, tmp_path
-    ):
-        report = tmp_path / "drc.json"
-        result = run_cli(
-            kicad_cli_required,
-            ["pcb", "drc", "--format", "json", "-o", str(report), str(demo_board_required)],
-            tmp_path,
-        )
-        data = json.loads(report.read_text(encoding="utf-8"))
-
-        assert result.returncode == 0
-        # The demo board has no Edge.Cuts outline, so DRC reports an error.
-        assert [v["severity"] for v in data["violations"]] == ["error"]
-
 
 class TestERCAndDRCChecksAgainstRealKicadCli:
     def test_erc_check_does_not_error(self, kicad_cli_required, tmp_path):
@@ -209,56 +164,6 @@ class TestERCAndDRCChecksAgainstRealKicadCli:
             ctx.close()
 
         assert result.status == TestStatus.PASS
-
-    def test_drc_check_does_not_error(self, kicad_cli_required, tmp_path):
-        ctx = DesignContext(
-            schematic_path=DEMO_SCHEMATIC,
-            board_path=DEMO_BOARD,
-            kicad_cli_path=str(kicad_cli_required),
-        )
-        try:
-            report = TestRunner([DRCRunCheck(schematic_parity=False)]).run(ctx)
-        finally:
-            ctx.close()
-
-        assert report.error_count == 0
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "The demo board has a real DRC error (malformed outline), but "
-            "DRCRunCheck parses stdout instead of the report file and looks for "
-            "a 'drc_violation' key instead of KiCad's 'violations', so it reports "
-            "pass. Fix: pass -o <tmpfile>, read it, and use the 'violations' key."
-        ),
-    )
-    def test_drc_check_detects_the_real_outline_error(self, kicad_cli_required):
-        ctx = DesignContext(
-            schematic_path=DEMO_SCHEMATIC,
-            board_path=DEMO_BOARD,
-            kicad_cli_path=str(kicad_cli_required),
-        )
-        try:
-            result = DRCRunCheck(schematic_parity=False).run(ctx)
-        finally:
-            ctx.close()
-
-        assert result.status == TestStatus.FAIL
-        assert result.details["filtered_violations"] == 1
-
-    def test_drc_check_passes_when_the_cli_cannot_run(self, kicad_cli_required):
-        ctx = DesignContext(
-            schematic_path=DEMO_SCHEMATIC,
-            board_path=DEMO_BOARD,
-            kicad_cli_path=str(kicad_cli_required),
-        )
-        try:
-            result = DRCRunCheck(strict=False).run(ctx)
-        finally:
-            ctx.close()
-
-        # Proves the check reaches a real subprocess without raising.
-        assert result.status in (TestStatus.PASS, TestStatus.FAIL, TestStatus.SKIP)
 
 
 class TestSymbolInLibraryCheckAgainstRealKicadCli:
@@ -290,26 +195,3 @@ class TestSymbolInLibraryCheckAgainstRealKicadCli:
         # The check shells out to a subcommand KiCad 10 removed, so it can only
         # ever error out. This is the current, broken behaviour.
         assert result.status == TestStatus.ERROR
-
-
-class TestKipyApiServer:
-    """Object-level access needs a live kicad-cli api-server."""
-
-    def test_api_server_subcommand_is_unavailable(self, api_server_available):
-        if not api_server_available:
-            pytest.skip(
-                "installed kicad-cli has no 'api-server' subcommand; "
-                "symbol/board object access cannot be exercised"
-            )
-        assert api_server_available
-
-    def test_design_context_can_load_the_demo_schematic(self, api_server_available):
-        if not api_server_available:
-            pytest.skip("kicad-cli api-server unavailable in this KiCad install")
-
-        ctx = DesignContext(schematic_path=str(DEMO_SCHEMATIC), headless=True)
-        try:
-            assert ctx.has_schematic()
-            assert ctx.schematic is not None
-        finally:
-            ctx.close()

@@ -215,7 +215,30 @@ class TestReportParsers:
         # DRC did not move per sheet, so it keeps one top-level list.
         payload = json.dumps({"violations": [{"severity": "error", "type": "track_dangling"}]})
 
-        assert parse_drc_report(payload) == [{"severity": "error", "type": "track_dangling"}]
+        assert parse_drc_report(payload) == [
+            {"severity": "error", "type": "track_dangling", "source": "violations"}
+        ]
+
+    def test_parse_drc_report_reads_unconnected_items_and_parity_too(self):
+        # KiCad 10 keeps unrouted connections and schematic differences in lists
+        # of their own; reading only "violations" passes an unrouted board.
+        payload = json.dumps(
+            {
+                "violations": [],
+                "unconnected_items": [{"severity": "error", "type": "unconnected_items"}],
+                "schematic_parity": [{"severity": "warning", "type": "missing_footprint"}],
+            }
+        )
+
+        assert [(v["source"], v["type"]) for v in parse_drc_report(payload)] == [
+            ("unconnected_items", "unconnected_items"),
+            ("schematic_parity", "missing_footprint"),
+        ]
+
+    def test_parse_drc_report_reads_the_drc_violation_key_of_older_reports(self):
+        payload = json.dumps({"drc_violation": [{"severity": "error", "type": "clearance"}]})
+
+        assert parse_drc_report(payload)[0]["source"] == "violations"
 
     def test_drc_violations_carry_no_sheet(self):
         payload = json.dumps({"violations": [{"severity": "error", "type": "clearance"}]})

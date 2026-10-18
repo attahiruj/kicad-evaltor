@@ -31,15 +31,12 @@ class FootprintExistsCheck(Check[FootprintExistsParams]):
             return CheckResult.skip(self.id, "No board available")
 
         params = self.params
-        footprints = ctx.board.get_footprints()
-
-        matches = []
-        for fp in footprints:
-            if params.reference and fp.reference != params.reference:
-                continue
-            if params.lib_id and fp.lib_id != params.lib_id:
-                continue
-            matches.append(fp)
+        matches = [
+            fp
+            for fp in ctx.board.get_footprints()
+            if (not params.reference or fp.reference == params.reference)
+            and (not params.lib_id or fp.lib_id == params.lib_id)
+        ]
 
         if matches:
             refs = [f.reference for f in matches]

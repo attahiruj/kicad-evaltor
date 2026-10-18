@@ -34,7 +34,13 @@ class ConsistencyCheck(Check[ConsistencyParams]):
         symbols = ctx.sheet_symbols()
         footprints = ctx.board.get_footprints()
 
-        sch_refs = {s.reference for s in symbols}
+        # Power symbols and parts marked "exclude from board" have no footprint by
+        # design, so they are not expected on the board.
+        sch_refs = {
+            s.reference
+            for s in symbols
+            if not s.reference.startswith("#") and getattr(s, "on_board", True)
+        }
         pcb_refs = {f.reference for f in footprints}
 
         in_sch_not_pcb = sch_refs - pcb_refs
