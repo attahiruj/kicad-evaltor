@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
@@ -29,6 +29,8 @@ class CheckResult:
     message: str = ""
     details: dict[str, Any] = field(default_factory=dict)
     duration: float = 0.0
+    requirement_id: str | None = None
+    parameters: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def pass_(cls, check_id: str, message: str = "", **details: Any) -> CheckResult:
@@ -62,6 +64,8 @@ class CheckResult:
             "message": self.message,
             "details": self.details,
             "duration": self.duration,
+            "requirement_id": self.requirement_id,
+            "parameters": self.parameters,
         }
 
 
@@ -88,7 +92,10 @@ class Check(ABC, Generic[ParamsT]):
 
     Params: ClassVar[type[ParamsT]]
 
-    def __init__(self, **params: Any) -> None:
+    def __init__(self, *, requirement_id: str | None = None, **params: Any) -> None:
+        if requirement_id is not None and not requirement_id.strip():
+            raise ValueError("requirement_id must not be blank")
+        self.requirement_id = requirement_id
         self._params: ParamsT = self.Params(**params)
 
     @property
@@ -97,8 +104,33 @@ class Check(ABC, Generic[ParamsT]):
 
     @property
     def params_dict(self) -> dict[str, Any]:
-        return self._params.__dict__
+        """A snapshot of the parameters, safe to keep after the check changes.
+
+        Dataclass params are copied deeply. Anything else, such as a plain object
+        a custom check uses, or values that cannot be copied, falls back to a
+        shallow copy of its attributes rather than failing the run.
+        """
+        params = self._params
+        if is_dataclass(params) and not isinstance(params, type):
+            try:
+                return asdict(params)
+            except Exception:
+                pass
+        return dict(getattr(params, "__dict__", {}))
 
     @abstractmethod
     def run(self, ctx: DesignContext) -> CheckResult:
         pass
+
+
+def empty_selection(check_id: str, on_empty: str, **details: Any) -> CheckResult:
+    """Apply the caller's policy when a selector matches no entities."""
+    if on_empty == "pass":
+        return CheckResult.pass_(
+            check_id, "Selection matched no entities", selected_count=0, **details
+        )
+    if on_empty == "fail":
+        return CheckResult.fail(
+            check_id, "Selection matched no entities", selected_count=0, **details
+        )
+    return CheckResult.skip(check_id, "Selection matched no entities", selected_count=0, **details)

@@ -536,14 +536,14 @@ class TestERCRunCheck:
         args = ctx.cli_calls[0]
         assert args[:4] == ["sch", "erc", "--format", "json"]
         # The report must go to a file; kicad-cli only summarises on stdout.
-        assert args[-1] == str(ctx.schematic_path)
+        assert args[-1] == str(ctx.schematic_path.resolve())
         assert Path(args[args.index("-o") + 1]).name == "report.json"
 
     def test_explicit_schematic_path_overrides_context(self):
         ctx = ctx_with([FakeSymbol("R1")], cli=erc_report())
         run(ERCRunCheck(schematic_path="other.kicad_sch"), ctx)
 
-        assert ctx.cli_calls[0][-1] == "other.kicad_sch"
+        assert ctx.cli_calls[0][-1] == str(Path("other.kicad_sch").resolve())
 
 
 class TestConsistencyCheck:
@@ -588,9 +588,9 @@ class TestConsistencyCheck:
         assert result.details["in_schematic_not_pcb"] == ["C1"]
         assert result.details["in_pcb_not_schematic"] == ["D1"]
 
-    def test_require_both_false_passes_despite_drift(self):
+    def test_require_both_false_still_requires_schematic_parts(self):
         result = run(ConsistencyCheck(require_both=False), self._ctx(["R1", "C1"], ["R1"]))
-        assert result.is_pass
+        assert result.is_fail
 
     def test_duplicate_schematic_references_are_deduped(self):
         result = run(ConsistencyCheck(), self._ctx(["R1", "R1"], ["R1"]))

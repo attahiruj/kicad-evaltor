@@ -5,6 +5,7 @@ from kicad_evaltor.checks.schematic.components_connected import ComponentsConnec
 from kicad_evaltor.checks.schematic.consistency import ConsistencyCheck
 from kicad_evaltor.checks.schematic.erc_check import ERCRunCheck
 from kicad_evaltor.checks.schematic.footprint_assigned import FootprintAssignedCheck
+from kicad_evaltor.checks.schematic.net_members import NetMembersCheck
 from kicad_evaltor.checks.schematic.no_connect import NoConnectFloatingCheck
 from kicad_evaltor.checks.schematic.overlaps import (
     SymbolSymbolOverlapCheck,
@@ -15,6 +16,7 @@ from kicad_evaltor.checks.schematic.overlaps import (
     TextWireOverlapCheck,
 )
 from kicad_evaltor.checks.schematic.pair_polarity import PairPolarityCheck
+from kicad_evaltor.checks.schematic.pins_connected import PinsConnectedCheck
 from kicad_evaltor.checks.schematic.regulator_output import RegulatorOutputCheck
 from kicad_evaltor.checks.schematic.sheets import (
     SheetCycleCheck,
@@ -33,8 +35,10 @@ __all__ = [
     "ConsistencyCheck",
     "ERCRunCheck",
     "FootprintAssignedCheck",
+    "NetMembersCheck",
     "NoConnectFloatingCheck",
     "PairPolarityCheck",
+    "PinsConnectedCheck",
     "RegulatorOutputCheck",
     "SheetCycleCheck",
     "SheetFileMissingCheck",

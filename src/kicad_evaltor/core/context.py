@@ -12,6 +12,7 @@ from kicad_evaltor.hierarchy import SchematicTree, tree_for
 from kicad_evaltor.schematic_file import FileSchematic, FileSymbol, load_schematic
 from kicad_evaltor.utils.kicad_cli import (
     DEFAULT_CLI_TIMEOUT,
+    REPORT_CWD,
     SubprocessResult,
     find_kicad_cli,
     run_kicad_cli,
@@ -209,7 +210,9 @@ class DesignContext:
         """Run kicad-cli, allowing ``timeout`` seconds or the context's default."""
         cli_path = self.kicad_cli_path
         return (
-            run_kicad_cli([cli_path, *args], timeout=timeout or self._cli_timeout)
+            run_kicad_cli(
+                [cli_path, *args], timeout=timeout or self._cli_timeout, cwd=REPORT_CWD.get()
+            )
             if cli_path
             else SubprocessResult(
                 returncode=-1,
@@ -218,9 +221,15 @@ class DesignContext:
             )
         )
 
-    def close(self) -> None:
-        """Drop cached results. Nothing else is held open."""
+    def invalidate(self) -> None:
+        """Reload all files and tool results on next access after a design edit."""
         self._memo.clear()
+        self._schematic = None
+        self._board = None
+
+    def close(self) -> None:
+        """Drop all cached design data. Nothing else is held open."""
+        self.invalidate()
 
     def __enter__(self) -> DesignContext:
         return self

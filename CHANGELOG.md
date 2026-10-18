@@ -65,6 +65,21 @@ Board evaluation, built and tested against a real KiCad 10 board
   and every DRC-backed check filters that one report.
 - `kicad_evaltor.edit` edits boards too: `remove_net_tracks`, `remove_footprint`
   and `move_footprint`. They are for making failing cases from a real board.
+- `sch.pins.connected` (`PinsConnectedCheck`): two specific pins are connected,
+  or must not be, crossing only the internal pin pairs given in `through`. A pin
+  missing from the netlist is an error: absence cannot prove isolation.
+- `sch.net.members` (`NetMembersCheck`): a net holds the listed pins, and with
+  `exact=True` nothing else.
+- `on_empty="skip" | "fail" | "pass"` on `pcb.trace.width` and
+  `pcb.footprint.matches_schematic`, for when a selection matches nothing. It
+  defaults to `"skip"`, so a mistyped net class is never a quiet pass.
+- Checks take a `requirement_id`, and runner results carry it with a snapshot of
+  the check's parameters. `TestReport.evaluated_count` counts passes and
+  failures; `TestReport.not_passed()` adds errors and skips.
+- `DesignContext.invalidate()` reloads the files and drops cached tool results,
+  for a generate, evaluate and repair loop.
+- `kicad_evaltor.selectors.select` picks items by wildcard for custom checks and
+  can require how many it picks.
 - `examples/pcb.py` runs the board checks on the example board.
 
 ### Changed
@@ -92,6 +107,19 @@ Board evaluation, built and tested against a real KiCad 10 board
 - `DesignContext` is file-backed throughout. `board` is a `FileBoard`.
   `headless` and `timeout_ms` are still accepted, and ignored.
 
+- `pcb.footprint.near` in decoupling mode judges each power-input pin on its
+  own. It used to take the nearest capacitor per net, which let one close pin
+  hide a far one: on the example board, U2's VINA pin is 3.79 mm from its
+  nearest capacitor.
+- `project.schematic_pcb_consistency` with `require_both=False` still requires
+  every schematic part on the board; it only allows extra board parts.
+- `parse_erc_report` and `parse_drc_report` raise `InvalidReport` for malformed
+  or unrecognised input instead of returning no findings, and the ERC and DRC
+  checks report that as an error.
+- kicad-cli runs in its scratch folder through the subprocess's working
+  directory; the process's own working directory is never changed, so reports
+  can run on several threads.
+
 ### Removed
 
 - The `kicad-python` (kipy) dependency, and with it `DesignContext.kicad`,
@@ -100,6 +128,11 @@ Board evaluation, built and tested against a real KiCad 10 board
 
 ### Fixed
 
+- A malformed ERC or DRC report no longer reads as a clean design.
+- `sch.erc` resolves a relative schematic path before kicad-cli runs.
+- A case-insensitive value match no longer treats `1m` and `1M` as equal.
+- A pad-to-pad route through a via in the middle of a track now joins the
+  layers the via spans.
 - Net names KiCad stores escaped, like `Net-(U2-PS{slash}SYNC)`, are read as
   KiCad shows them (`Net-(U2-PS/SYNC)`), from both the board file and pcbnew.
   Such a net used to show no tracks.

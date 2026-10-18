@@ -560,9 +560,13 @@ class TestProximity:
     def test_decoupling_pairs_caps_with_power_pins(self):
         result = FootprintNearCheck(decoupling="U2", max_distance_mm=1).run(ctx())
 
-        assert result.status == TestStatus.PASS
-        [pin] = result.details["power_pins"]
-        assert (pin["net"], pin["nearest_capacitor"]) == ("+3.7V", "C3")
+        # The old per-net minimum hid the far-away second power pin.
+        assert result.status == TestStatus.FAIL
+        pins = result.details["power_pins"]
+        assert len(pins) == 2
+        assert all(pin["nearest_capacitor"] == "C3" for pin in pins)
+        assert min(pin["distance_mm"] for pin in pins) < 1
+        assert max(pin["distance_mm"] for pin in pins) > 1
 
     def test_decoupling_too_far(self):
         result = FootprintNearCheck(decoupling="U1", max_distance_mm=1).run(ctx())

@@ -9,6 +9,7 @@ import sys
 import tempfile
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -102,6 +103,37 @@ def run_kicad_cli(
         )
 
 
+class InvalidReport(ValueError):
+    """A tool report cannot establish whether a design passed."""
+
+
+def _report_data(text: str, *, erc: bool) -> dict[str, Any]:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise InvalidReport("Invalid report JSON") from exc
+    if not isinstance(data, dict):
+        raise InvalidReport("Report must be an object")
+    keys: tuple[str, ...] = ("violations", "erc_violation", "drc_violation")
+    if erc and "sheets" in data:
+        sheets = data["sheets"]
+        if not isinstance(sheets, list) or any(not isinstance(s, dict) for s in sheets):
+            raise InvalidReport("Invalid report sheets")
+        groups = [s.get("violations") for s in sheets]
+    else:
+        keys = keys if erc else (*DRC_SOURCES, "drc_violation")
+        groups = [data[k] for k in keys if k in data]
+        if not groups:
+            raise InvalidReport("Report has no recognized findings list")
+    for group in groups:
+        if not isinstance(group, list) or any(not isinstance(v, dict) for v in group):
+            raise InvalidReport("Invalid findings list")
+        for finding in group:
+            if finding.get("severity") not in ("error", "warning", "ignore", "info", "exclusion"):
+                raise InvalidReport("Missing or unknown finding severity")
+    return data
+
+
 def parse_erc_report(json_output: str) -> list[dict[str, Any]]:
     """Extract ERC violations from a KiCad ERC JSON report.
 
@@ -114,14 +146,9 @@ def parse_erc_report(json_output: str) -> list[dict[str, Any]]:
 
     Each returned violation carries the ``sheet`` path it was found under, which
     is the only thing that says which sheet of a hierarchy the error is on.
-    Unparseable input yields an empty list.
+    Invalid or unrecognized input raises InvalidReport.
     """
-    try:
-        data = json.loads(json_output)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(data, dict):
-        return []
+    data = _report_data(json_output, erc=True)
 
     sheets = data.get("sheets")
     if isinstance(sheets, list):
@@ -144,14 +171,9 @@ def parse_drc_report(json_output: str) -> list[dict[str, Any]]:
 
     ``source`` names the list it came from (see :data:`DRC_SOURCES`). Reports
     from KiCad 8 and 9, which have only the one list, read the same way.
-    Unparseable input yields an empty list.
+    Invalid or unrecognized input raises InvalidReport.
     """
-    try:
-        data = json.loads(json_output)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(data, dict):
-        return []
+    data = _report_data(json_output, erc=False)
     found: list[dict[str, Any]] = []
     for source in DRC_SOURCES:
         entries = data.get(source)
@@ -220,6 +242,9 @@ def violation_details(violation: Mapping[str, Any]) -> dict[str, Any]:
     return details
 
 
+REPORT_CWD: ContextVar[Path | None] = ContextVar("report_cwd", default=None)
+
+
 @contextmanager
 def report_workspace(kind: str) -> Iterator[Path]:
     """Run a kicad-cli report command inside a throwaway directory.
@@ -228,14 +253,13 @@ def report_workspace(kind: str) -> Iterator[Path]:
     files, into the current working directory. Redirecting the CWD keeps those
     out of the user's project and repository.
 
-    Note: this changes the process-wide CWD, so it is not safe to use from
-    threads. ``DesignContext.run_kicad_cli`` is likewise process-global.
+    The directory is passed to subprocesses through a context-local value;
+    the host process working directory is never changed.
     """
     workdir = Path(tempfile.mkdtemp(prefix=f"kicad-evaltor-{kind}-"))
-    previous = Path.cwd()
-    os.chdir(workdir)
+    token = REPORT_CWD.set(workdir)
     try:
         yield workdir
     finally:
-        os.chdir(previous)
+        REPORT_CWD.reset(token)
         shutil.rmtree(workdir, ignore_errors=True)

@@ -11,6 +11,7 @@ from kicad_evaltor.core.context import DesignContext
 @dataclass
 class ConsistencyParams(CheckParams):
     require_both: bool = True
+    """Also reject PCB references absent from the schematic."""
 
     def validate(self) -> None:
         pass
@@ -47,9 +48,9 @@ class ConsistencyCheck(Check[ConsistencyParams]):
         in_pcb_not_sch = pcb_refs - sch_refs
 
         issues = []
+        if in_sch_not_pcb:
+            issues.append(f"In schematic but not PCB: {', '.join(sorted(in_sch_not_pcb))}")
         if params.require_both:
-            if in_sch_not_pcb:
-                issues.append(f"In schematic but not PCB: {', '.join(sorted(in_sch_not_pcb))}")
             if in_pcb_not_sch:
                 issues.append(f"In PCB but not schematic: {', '.join(sorted(in_pcb_not_sch))}")
 

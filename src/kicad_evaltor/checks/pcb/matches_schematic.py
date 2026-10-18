@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from kicad_evaltor.checks.base import Check, CheckCategory, CheckParams, CheckResult
+from kicad_evaltor.checks.base import (
+    Check,
+    CheckCategory,
+    CheckParams,
+    CheckResult,
+    empty_selection,
+)
 from kicad_evaltor.checks.registry import register
 from kicad_evaltor.core.context import DesignContext
 from kicad_evaltor.schematic_file import NetlistUnavailable
@@ -11,10 +17,17 @@ from kicad_evaltor.schematic_file import NetlistUnavailable
 
 @dataclass
 class FootprintMatchesSchematicParams(CheckParams):
+    on_empty: str = "skip"
+    """What to report when nothing is selected: ``"skip"`` (default), ``"fail"``
+    or ``"pass"``. A selection that matches nothing never passes by accident."""
     references: list[str] | None = None
     check_pins: bool = True
     """Also require every symbol pin number to have a pad on the footprint. Pin
     numbers come from kicad-cli's netlist export."""
+
+    def validate(self) -> None:
+        if self.on_empty not in ("pass", "fail", "skip"):
+            raise ValueError("on_empty must be pass, fail or skip")
 
 
 @register
@@ -46,6 +59,18 @@ class FootprintMatchesSchematicCheck(Check[FootprintMatchesSchematicParams]):
             and not s.reference.startswith("#")
             and (wanted is None or s.reference in wanted)
         }
+        if wanted is not None:
+            unknown = sorted(wanted - set(symbols))
+            if unknown:
+                # A part the caller named that is not in the design is a finding,
+                # not an empty selection.
+                return CheckResult.fail(
+                    self.id,
+                    f"No placed symbol for {', '.join(unknown)}",
+                    missing_references=unknown,
+                )
+        if not symbols:
+            return empty_selection(self.id, p.on_empty, checked=0)
         netlist = None
         if p.check_pins:
             try:

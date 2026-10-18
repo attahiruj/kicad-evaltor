@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from kicad_evaltor.checks.base import Check, CheckCategory, CheckResult, TestStatus
@@ -43,6 +44,14 @@ class TestReport:
                 categories[cat].append(result)
         return categories
 
+    def not_passed(self) -> list[CheckResult]:
+        """Failures, errors and skips; unlike failures(), includes unchecked work."""
+        return [r for r in self.results if not r.is_pass]
+
+    @property
+    def evaluated_count(self) -> int:
+        return self.passed_count + self.failed_count
+
     def failures(self) -> list[CheckResult]:
         return [r for r in self.results if r.is_fail]
 
@@ -50,6 +59,7 @@ class TestReport:
         return {
             "summary": {
                 "total": len(self.results),
+                "evaluated": self.evaluated_count,
                 "passed": self.passed_count,
                 "failed": self.failed_count,
                 "errors": self.error_count,
@@ -115,16 +125,37 @@ class TestRunner:
 
     def run(self, ctx: DesignContext) -> TestReport:
         results: list[CheckResult] = []
-        for check in self._checks:
+        ids = [check.requirement_id or f"{check.id}[{i}]" for i, check in enumerate(self._checks)]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Duplicate requirement_id in suite")
+        for check, requirement_id in zip(self._checks, ids):
             start = time.perf_counter()
+            parameters = check.params_dict
             try:
                 result = check.run(ctx)
+                if not isinstance(result, CheckResult):
+                    raise TypeError("Check.run must return CheckResult")  # noqa: TRY301
             except Exception as e:
                 result = CheckResult.error(check.id, f"Check raised exception: {e}")
-            finally:
-                result.duration = time.perf_counter() - start
+            result = _detached(result)
+            result.duration = time.perf_counter() - start
+            result.requirement_id = requirement_id
+            result.parameters = parameters
             results.append(result)
 
         report = TestReport(results=results)
-        report._checks = self._checks
+        report._checks = list(self._checks)
         return report
+
+
+def _detached(result: CheckResult) -> CheckResult:
+    """A copy of the result the check cannot change afterwards.
+
+    A deep copy where possible. Details holding something that cannot be copied
+    (a lock, an open file) keep a shallow copy instead: how a check reports its
+    evidence must never turn its verdict into an error.
+    """
+    try:
+        return deepcopy(result)
+    except Exception:
+        return replace(result, details=dict(result.details), parameters=dict(result.parameters))

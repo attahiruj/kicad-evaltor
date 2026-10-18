@@ -52,8 +52,8 @@ class FootprintNearParams(CheckParams):
 class FootprintNearCheck(Check[FootprintNearParams]):
     """A part sits within a distance of another part or pad.
 
-    Distance is the gap between copper pad outlines, as pcbnew draws them, so it
-    is what the current actually crosses rather than centre to centre.
+    Distance is the planar gap between copper pad outlines, as pcbnew draws
+    them. This measures placement, not routed path length or loop inductance.
 
     The ``decoupling`` mode works out the pairs itself. Each pad of the IC whose
     pin type is ``power_in`` (read from the board, which carries the schematic's
@@ -123,8 +123,14 @@ class FootprintNearCheck(Check[FootprintNearParams]):
         caps = [fp for fp in board.footprints if _is_cap(fp, p.capacitor_prefix)]
         pins = []
         failing = []
-        for net in power_nets:
-            ic_pads = [pad for pad in ic_geo.pads if pad.net == net and pad.copper_layers]
+        required = {
+            pad.number for pad in ic.pads if pad.pin_type == "power_in" and pad.net in power_nets
+        }
+        for number in sorted(required):
+            ic_pads = [pad for pad in ic_geo.pads if pad.number == number and pad.copper_layers]
+            if not ic_pads:
+                return CheckResult.error(self.id, f"Missing geometry for {ic_ref}.{number}")
+            net = ic_pads[0].net
             candidates = [c for c in caps if net in c.nets and any(is_ground(n) for n in c.nets)]
             best: tuple[float, str] | None = None
             for cap in candidates:
@@ -142,7 +148,7 @@ class FootprintNearCheck(Check[FootprintNearParams]):
             }
             pins.append(entry)
             if best is None or best[0] > p.max_distance_mm:
-                failing.append(net)
+                failing.append(f"{ic_ref}.{number} ({net})")
         if failing:
             return CheckResult.fail(
                 self.id,

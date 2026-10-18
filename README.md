@@ -31,7 +31,7 @@ Where KiCad already has the answer, the library asks KiCad instead of guessing:
 
 | Check | Needs |
 |-------|-------|
-| `sch.components.connected`, `sch.regulator.output_voltage`, `sch.pair.polarity`, `pcb.footprint.matches_schematic` | `kicad-cli sch export netlist` |
+| `sch.components.connected`, `sch.pins.connected`, `sch.net.members`, `sch.regulator.output_voltage`, `sch.pair.polarity`, `pcb.footprint.matches_schematic` | `kicad-cli sch export netlist` |
 | `sch.erc` | `kicad-cli sch erc` |
 | `pcb.drc`, `pcb.routing.complete`, `pcb.schematic_parity`, `pcb.footprint.overlap`, `pcb.footprint.matches_library`, `pcb.silk.over_copper`, `pcb.silk.overlap`, `pcb.tuning.rules` | `kicad-cli pcb drc` (run once per context, shared) |
 | `pcb.fab.exports`, `pcb.fab.position_file` | `kicad-cli pcb export` |
@@ -107,9 +107,10 @@ python examples/visual.py path/to/your.kicad_sch          # any other sheet
 [`examples/pcb.py`](examples/pcb.py) runs the board checks against a real
 KiCad 10 board,
 [`examples/demo_circuit/esp_data_logger_board/`](examples/demo_circuit/esp_data_logger_board/):
-an ESP32-C6 data logger whose DRC is clean. It also prints three things on that
+an ESP32-C6 data logger whose DRC is clean. It also prints four things on that
 board that DRC does not report: tracks narrower than their net class asks for, a
-thermal pad with no vias, and hidden reference designators.
+thermal pad with no vias, a power pin beyond the chosen decoupling distance,
+and hidden reference designators.
 
 ```bash
 python examples/pcb.py
@@ -125,6 +126,8 @@ python examples/pcb.py
 | `sch.component.value` | `ComponentValueCheck` | A component's value matches, case-insensitively, or as a number within a tolerance (`numeric=True`: `4k7` equals `4.7k`) |
 | `sch.component.property` | `ComponentPropertyCheck` | An arbitrary field on a component matches |
 | `sch.components.connected` | `ComponentsConnectedCheck` | Two components share at least N nets, optionally counting through series passives |
+| `sch.pins.connected` | `PinsConnectedCheck` | Two specific pins are connected (or must not be), crossing only the internal pin pairs you name |
+| `sch.net.members` | `NetMembersCheck` | A net contains the pins you list, and with `exact=True` (the default) nothing else |
 | `sch.footprint.assigned` | `FootprintAssignedCheck` | Footprints are assigned, optionally allowing `None` |
 | `sch.symbol.in_library` | `SymbolInLibraryCheck` | A symbol exists in the project libraries |
 | `sch.symbol.matches_library` | `SymbolMatchesLibraryCheck` | Placed symbols are unchanged copies of their library symbols (pins and body; fields ignored) |
@@ -342,6 +345,72 @@ drawn, so it is not part of what the sheet shows.
 `result.to_dict()` give the same data as Python objects, and
 `report.failures_json()` returns just the failures, which is usually what a CI
 job wants to read.
+
+## Authoring precise rules
+
+The caller owns evaluation policy. Component connectivity means shared nets
+(including ground); use pin checks when the signal or pin assignment matters:
+
+```python
+from kicad_evaltor import PinsConnectedCheck, NetMembersCheck, TraceWidthCheck
+
+signal = PinsConnectedCheck(
+    requirement_id="connector-data",
+    pin_a="U1.3",
+    pin_b="J1.2",
+    through={"R1": [("1", "2")]},
+)
+no_short = PinsConnectedCheck(pin_a="U1.3", pin_b="J1.1", connected=False)
+exact_net = NetMembersCheck(net="/DATA", pins=["U1.3", "R1.1"])
+width = TraceWidthCheck(net_name="/DATA", min_width_mm=0.2, on_empty="fail")
+```
+
+Pin checks cross only explicitly configured pin pairs, without guessing which
+parts conduct. `through` permits traversal; it does not require that a path
+traverse every named part. Missing endpoints in the exported netlist return
+ERROR, including for forbidden connections: absence cannot prove isolation.
+`NetMembersCheck(exact=False)` permits additional net members.
+
+`TraceWidthCheck` and `FootprintMatchesSchematicCheck` accept
+`on_empty="skip" | "fail" | "pass"`. The default is `"skip"`: a selection
+that matches nothing (a mistyped net class, an unrouted net) is never a quiet
+pass. Empty results carry `selected_count=0`. A reference you name in
+`FootprintMatchesSchematicCheck(references=[...])` that is not in the design
+fails outright. Reusable selectors are available for
+custom checks:
+
+```python
+from kicad_evaltor.selectors import select
+
+resistors = select(ctx.sheet_symbols(), "R*", key=lambda s: s.reference)
+resistors.require_count(minimum=1, maximum=20)
+```
+
+Runner results include `requirement_id` and a parameter snapshot. Give explicit
+IDs to track requirements across reordered suites; generated IDs include the
+suite index. Duplicate IDs are rejected. `report.evaluated_count` counts PASS
+and FAIL; `report.not_passed()` includes errors and skips as well as failures.
+`failures_json()` retains its narrower FAIL/ERROR behavior. Empty suites still
+have `all_passed=True`; callers can additionally require a nonzero evaluated
+count when appropriate.
+
+Contexts cache a design until `ctx.invalidate()` or `ctx.close()`. Call
+`invalidate()` after editing inputs in a generate/evaluate/repair loop. Use a
+separate context for each concurrent design. Temporary report directories are
+context-local and never change the host process working directory.
+
+Malformed or structurally unrecognized ERC/DRC reports raise `InvalidReport`
+when parsed directly and produce ERROR through the checks. Numeric SI case is
+preserved even during case-insensitive text comparison (`1m` differs from
+`1M`). Numeric value parsing compares magnitudes; it is not dimensional analysis.
+`ConsistencyCheck(require_both=False)` allows extra PCB references but still
+requires every schematic component intended for the board.
+
+Decoupling proximity is evaluated per power pin. It measures planar placement,
+not actual routed loop length, capacitor electrical suitability, or inductance.
+Pad-to-pad route length supports straight-track endpoint and via landings;
+interior arc joins, intermediate pad bridges, and filled-zone paths are not
+modeled. Use KiCad routing completeness checks for general copper connectivity.
 
 ## Custom checks
 

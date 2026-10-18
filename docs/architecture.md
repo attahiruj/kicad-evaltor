@@ -279,13 +279,13 @@ never asked that way, because two sheets' coordinates are two coordinate spaces.
   pcbnew reports rather than rebuilding them.
 - **All `pcbnew` access goes through `pcbnew_bridge.py`.** SWIG bindings are
   slated to give way to the IPC API; when they do, only that module changes.
-- **Resolve paths before `report_workspace`.** It changes the working directory,
-  so a relative board path passed to kicad-cli inside it points into the scratch
-  folder.
+- **Resolve input paths before invoking report commands.** Their subprocess
+  working directory is the scratch folder, so file arguments must be absolute.
 - **No global or project KiCad configuration is ever modified.** Checks read;
   they do not rewrite project settings.
-- **`report_workspace` changes process-wide CWD** and is not thread-safe. Do not
-  call it from concurrent check execution.
+- **`report_workspace` uses context-local subprocess CWD.** It never changes
+  process-wide CWD. Use separate DesignContext instances for concurrent designs;
+  a context's mutable caches are not synchronized.
 - **One sheet is one coordinate space.** Two files' geometry is never compared,
   and a `SchematicScene` is never built from more than one file. Aggregation
   across sheets is done by iterating sheets, not by merging their items.

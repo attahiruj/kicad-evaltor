@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import ClassVar
 
 from kicad_evaltor.checks.base import Check, CheckCategory, CheckParams, CheckResult
 from kicad_evaltor.checks.registry import register
 from kicad_evaltor.core.context import DesignContext
 from kicad_evaltor.utils.kicad_cli import (
+    InvalidReport,
     filter_violations_by_severity,
     parse_erc_report,
     report_workspace,
@@ -42,7 +44,7 @@ class ERCRunCheck(Check[ERCRunParams]):
             return CheckResult.skip(self.id, "No schematic available")
 
         params = self.params
-        sch_path = params.schematic_path or str(ctx.schematic_path)
+        sch_path = str(Path(params.schematic_path or ctx.schematic_path).resolve())
 
         with report_workspace("erc") as workdir:
             args = ["sch", "erc", "--format", "json", "-o", str(workdir / "report.json"), sch_path]
@@ -68,7 +70,10 @@ class ERCRunCheck(Check[ERCRunParams]):
             if not report.exists():
                 return CheckResult.error(self.id, f"ERC report not written to {report}")
 
-            violations = parse_erc_report(report.read_text(encoding="utf-8", errors="replace"))
+            try:
+                violations = parse_erc_report(report.read_text(encoding="utf-8", errors="replace"))
+            except InvalidReport as exc:
+                return CheckResult.error(self.id, str(exc))
 
         filtered = filter_violations_by_severity(violations, params.severity)
 

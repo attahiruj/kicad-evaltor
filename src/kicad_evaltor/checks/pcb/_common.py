@@ -14,7 +14,12 @@ from typing import Any
 from kicad_evaltor.checks.base import CheckResult
 from kicad_evaltor.core.context import DesignContext
 from kicad_evaltor.pcbnew_bridge import BoardGeometry, GeometryUnavailable
-from kicad_evaltor.utils.kicad_cli import parse_drc_report, report_workspace, violation_details
+from kicad_evaltor.utils.kicad_cli import (
+    InvalidReport,
+    parse_drc_report,
+    report_workspace,
+    violation_details,
+)
 
 
 @dataclass
@@ -83,8 +88,7 @@ def _run_drc(
     timeout: float | None,
     board: str | Path | None = None,
 ) -> DrcRun:
-    # Resolve first: report_workspace changes the working directory, and a
-    # relative board path would then point into the scratch folder.
+    # The subprocess runs in a scratch directory; input paths must be absolute.
     board_path = str(Path(board or ctx.board_path).resolve())
     with report_workspace("drc") as workdir:
         report = workdir / "report.json"
@@ -105,10 +109,11 @@ def _run_drc(
             return DrcRun(error=f"DRC command failed: {result.stderr.strip() or result.stdout}")
         if not report.exists():
             return DrcRun(error=f"DRC report not written to {report}", ran=True)
-        return DrcRun(
-            entries=parse_drc_report(report.read_text(encoding="utf-8", errors="replace")),
-            ran=True,
-        )
+        try:
+            entries = parse_drc_report(report.read_text(encoding="utf-8", errors="replace"))
+        except InvalidReport as exc:
+            return DrcRun(error=str(exc), ran=True)
+        return DrcRun(entries=entries, ran=True)
 
 
 def drc_error(check_id: str, run: DrcRun) -> CheckResult:

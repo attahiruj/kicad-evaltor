@@ -81,6 +81,12 @@ def net_graph(board: FileBoard, net: str, *, include_vias: bool = False) -> NetG
                 t = _position_along(track, end)
                 if t is not None:
                     landings.setdefault(t, []).append(end)
+        for via in board.vias_on(net):
+            if track.layer in _via_layers(board, via):
+                point = (via.x, via.y)
+                t = _position_along(track, point)
+                if t is not None:
+                    landings.setdefault(t, []).append(point)
         cuts = sorted({0.0, 1.0, *landings})
         length = track.length
         points = [_point_at(track, t) for t in cuts]

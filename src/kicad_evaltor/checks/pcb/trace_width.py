@@ -4,7 +4,13 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from kicad_evaltor.board_file import BoardTrack
-from kicad_evaltor.checks.base import Check, CheckCategory, CheckParams, CheckResult
+from kicad_evaltor.checks.base import (
+    Check,
+    CheckCategory,
+    CheckParams,
+    CheckResult,
+    empty_selection,
+)
 from kicad_evaltor.checks.pcb._common import geometry
 from kicad_evaltor.checks.registry import register
 from kicad_evaltor.core.context import DesignContext
@@ -16,6 +22,9 @@ _EPSILON = 1e-6
 
 @dataclass
 class TraceWidthParams(CheckParams):
+    on_empty: str = "skip"
+    """What to report when no track is selected (a net class with no tracks, a
+    net not yet routed): ``"skip"`` (default), ``"fail"`` or ``"pass"``."""
     min_width_mm: float | None = None
     max_width_mm: float | None = None
     net_name: str | None = None
@@ -26,6 +35,8 @@ class TraceWidthParams(CheckParams):
     """Require each track to be at least its net class's track width."""
 
     def validate(self) -> None:
+        if self.on_empty not in ("pass", "fail", "skip"):
+            raise ValueError("on_empty must be pass, fail or skip")
         if self.min_width_mm is not None and self.min_width_mm <= 0:
             raise ValueError("min_width_mm must be > 0")
         if (
@@ -91,6 +102,8 @@ class TraceWidthCheck(Check[TraceWidthParams]):
             wanted = params.netclass
             tracks = [t for t in tracks if wanted in netclass_of.get(t.net, "").split(",")]
 
+        if not tracks:
+            return empty_selection(self.id, params.on_empty, tracks_checked=0)
         violations = []
         for track in tracks:
             low = params.min_width_mm

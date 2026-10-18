@@ -70,7 +70,11 @@ class ComponentValueCheck(Check[ComponentValueParams]):
                 elif params.case_sensitive:
                     match = actual == expected
                 else:
-                    match = actual.lower() == expected.lower()
+                    # Text folding must not erase meaningful SI prefix case.
+                    have, want = parse_value(actual), parse_value(expected)
+                    match = actual.lower() == expected.lower() and (
+                        have is None or want is None or have == want
+                    )
 
                 if match:
                     return CheckResult.pass_(

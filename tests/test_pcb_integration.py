@@ -132,7 +132,12 @@ class TestChecksEndToEnd:
             )
         }
 
-        assert {k: r.status for k, r in results.items()} == {k: TestStatus.PASS for k in results}
+        expected = {k: TestStatus.PASS for k in results}
+        expected["pcb.footprint.near"] = TestStatus.FAIL
+        assert {k: r.status for k, r in results.items()} == expected
+        pins = results["pcb.footprint.near"].details["power_pins"]
+        assert max(pin["distance_mm"] for pin in pins) == pytest.approx(3.7863, abs=0.001)
+        assert FootprintNearCheck(decoupling="U2", max_distance_mm=4).run(ctx).is_pass
 
     def test_relative_paths_work(self, kicad_python, monkeypatch):
         # kicad-cli runs from a scratch folder, so the board path must be

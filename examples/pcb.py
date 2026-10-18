@@ -13,6 +13,7 @@ KiCad's DRC does not report, and prints them:
 
 * 17 tracks on +3.7V are 0.3 mm, but the net's class (3.7V) asks for 0.5 mm.
   A net class width is a default in KiCad, not a rule, so DRC passes it.
+* U2 has a power pin about 3.79 mm from its nearest capacitor, exceeding 1 mm.
 * U2's exposed thermal pad (pad 15) has no net and no vias under it.
 * 42 of the 43 footprints that are not fiducials hide their reference
   designator.
@@ -69,7 +70,6 @@ MUST_PASS = [
     MountingHolesCheck(min_count=4, diameter_mm=3.2, min_edge_distance_mm=3),
     PowerPourCheck(net_name="GND", min_area_mm2=3000),
     PlaneCoverageCheck(net="GND", layer="B.Cu", min_fraction=0.75),
-    FootprintNearCheck(decoupling="U2", max_distance_mm=1),
     TraceLengthCheck(from_pad="U2.1", to_pad="C9.1", max_length_mm=5),
     LengthMatchCheck(pattern="/SD_*", max_skew_mm=25),
     ViaRulesCheck(),
@@ -78,6 +78,7 @@ MUST_PASS = [
 ]
 
 FINDINGS = [
+    FootprintNearCheck(decoupling="U2", max_distance_mm=1),
     TraceWidthCheck(match_netclass=True),
     ThermalViasCheck(reference="U2", min_vias=4),
     ReferenceVisibleCheck(exclude=["FID*"]),

@@ -246,28 +246,36 @@ class TestReportParsers:
         assert "sheet" not in parse_drc_report(payload)[0]
 
     def test_parse_erc_report_defaults_to_empty(self):
-        assert parse_erc_report("{}") == []
+        with pytest.raises(ValueError):
+            parse_erc_report("{}")
 
     def test_parse_erc_report_rejects_malformed_json(self):
-        assert parse_erc_report("not json") == []
+        with pytest.raises(ValueError):
+            parse_erc_report("not json")
 
     def test_parse_erc_report_rejects_a_non_list_sheets_key(self):
-        assert parse_erc_report(json.dumps({"sheets": {"oops": 1}})) == []
+        with pytest.raises(ValueError):
+            parse_erc_report(json.dumps({"sheets": {"oops": 1}}))
 
     def test_parse_erc_report_rejects_non_list_violations(self):
         payload = json.dumps({"sheets": [{"path": "/", "violations": {"oops": 1}}]})
 
-        assert parse_erc_report(payload) == []
+        with pytest.raises(ValueError):
+            parse_erc_report(payload)
 
     def test_parse_drc_report_rejects_non_list_violations(self):
-        assert parse_drc_report(json.dumps({"violations": "nope"})) == []
+        with pytest.raises(ValueError):
+            parse_drc_report(json.dumps({"violations": "nope"}))
 
     def test_parse_drc_report_defaults_to_empty(self):
-        assert parse_drc_report("{}") == []
+        with pytest.raises(ValueError):
+            parse_drc_report("{}")
 
     def test_parse_drc_report_rejects_malformed_json(self):
-        assert parse_drc_report("") == []
-        assert parse_drc_report("<html>error</html>") == []
+        with pytest.raises(ValueError):
+            parse_drc_report("")
+        with pytest.raises(ValueError):
+            parse_drc_report("<html>error</html>")
 
 
 class TestViolationDetails:

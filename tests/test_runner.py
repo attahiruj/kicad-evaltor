@@ -179,6 +179,7 @@ class TestTestReportSerialization:
         data = report.to_dict()
         assert data["summary"] == {
             "total": 2,
+            "evaluated": 1,
             "passed": 1,
             "failed": 0,
             "errors": 1,
@@ -195,6 +196,8 @@ class TestTestReportSerialization:
             "message": "ok",
             "details": {"count": 1},
             "duration": 0.0,
+            "requirement_id": None,
+            "parameters": {},
         }
 
     def test_to_json_round_trips(self):
@@ -218,6 +221,8 @@ class TestTestReportSerialization:
             "message": "broke",
             "details": {"count": 2},
             "duration": 0.0,
+            "requirement_id": None,
+            "parameters": {},
         }
 
     def test_failures_json_carries_only_the_failures(self):
