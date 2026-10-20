@@ -34,7 +34,7 @@ class RegulatorOutputParams(CheckParams):
 class RegulatorOutputCheck(Check[RegulatorOutputParams]):
     id = "sch.regulator.output_voltage"
     name = "Regulator Output Voltage"
-    description = "Works out a linear regulator's output from its part and divider"
+    description = "Compares a modeled regulator setpoint with the caller's expected voltage"
     category = CheckCategory.SCHEMATIC
     Params: ClassVar[type[RegulatorOutputParams]] = RegulatorOutputParams
 

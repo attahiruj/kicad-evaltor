@@ -11,6 +11,72 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Quantity:
+    value: float | None
+    dimension: str | None
+    token: str
+    reason: str = ""
+
+    @property
+    def known(self) -> bool:
+        return self.value is not None
+
+
+_UNITS = {
+    "ohm": "resistance",
+    "ohms": "resistance",
+    "Ω": "resistance",
+    "F": "capacitance",
+    "Hz": "frequency",
+    "H": "inductance",
+    "V": "voltage",
+    "A": "current",
+    "W": "power",
+    "s": "time",
+}
+
+
+def parse_quantity(text: str | None, *, dimension: str | None = None) -> Quantity:
+    """Read annotated quantities, with an optional caller-supplied dimension.
+
+    Explicit incompatible units are never reinterpreted. A bare engineering
+    value such as 100n may take the requested dimension. Multiple candidates
+    of that dimension are reported as ambiguous rather than guessed.
+    """
+    if dimension is not None and dimension not in set(_UNITS.values()):
+        raise ValueError(f"Unknown dimension {dimension!r}")
+    cleaned = (text or "").strip().replace("µ", "u").replace("μ", "u")
+    cleaned = re.sub(r"([\d.])\s+(?=[A-Za-zΩ])", r"\1", cleaned)
+    explicit: list[Quantity] = []
+    untyped: list[Quantity] = []
+    for token in re.split(r"[\s/,;=()_]+", cleaned):
+        token = re.sub(r"(?i:ohms?)$", "ohm", token).replace("Ω", "Ω")
+        token = re.sub(r"(?i:hz)$", "Hz", token)
+        value = parse_value(token)
+        if value is None:
+            continue
+        unit = next((u for u in sorted(_UNITS, key=len, reverse=True) if token.endswith(u)), None)
+        kind = _UNITS.get(unit) if unit else None
+        if kind is None and re.fullmatch(r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)?R\d*", token):
+            kind = "resistance"
+        if kind is None and re.fullmatch(r"[+-]?\d*V\d+", token):
+            kind = "voltage"
+        if kind is not None:
+            if dimension is None or dimension == kind:
+                explicit.append(Quantity(value, kind, token))
+        elif not token.endswith("%"):
+            untyped.append(Quantity(value, dimension, token))
+    choices = explicit + untyped if dimension is None else explicit or untyped
+    if len(choices) == 1:
+        return choices[0]
+    return Quantity(
+        None, dimension, cleaned, "ambiguous quantity" if choices else "no matching quantity"
+    )
+
 
 PREFIXES: dict[str, float] = {
     "f": 1e-15,
@@ -97,9 +163,9 @@ def _plain_float(word: str) -> float | None:
     return value if math.isfinite(value) else None
 
 
-def _clean(value: float) -> float:
+def _clean(value: float) -> float | None:
     """Undo binary rounding noise, so ``4k7`` is exactly ``4700.0``."""
-    return float(f"{value:.12g}")
+    return float(f"{value:.12g}") if math.isfinite(value) else None
 
 
 def values_match(a: float, b: float, tolerance: float) -> bool:

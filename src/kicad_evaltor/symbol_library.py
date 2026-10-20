@@ -372,6 +372,26 @@ def symbol_signature(node: list[SExpr], *, include_graphics: bool = True) -> Sym
     )
 
 
+def equivalent_symbols(
+    embedded: list[SExpr],
+    trusted: SymbolLibraries,
+    candidates: Iterable[str],
+    *,
+    include_graphics: bool = True,
+) -> tuple[str, ...]:
+    """Equivalent definitions among caller-selected trusted candidates.
+
+    Library nicknames and embedded names do not establish fidelity. Missing
+    trusted definitions raise SymbolNotFound rather than prove inequality.
+    """
+    signature = symbol_signature(embedded, include_graphics=include_graphics)
+    return tuple(
+        lib_id
+        for lib_id in candidates
+        if symbol_signature(trusted.resolve(lib_id), include_graphics=include_graphics) == signature
+    )
+
+
 def _unit_of(unit_name: str) -> tuple[int, int]:
     parts = unit_name.rsplit("_", 2)
     try:

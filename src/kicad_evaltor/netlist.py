@@ -130,6 +130,65 @@ class FileNetlist:
         for net in self.nets:
             yield from net.nodes
 
+    def refs_on(self, net: str) -> set[str]:
+        return {n.ref for n in self.nodes_on(net)}
+
+    def pins_named(self, ref: str, *names: str, case_sensitive: bool = True) -> list[FileNetNode]:
+        """All matching pins, preserving duplicate roles in multi-channel parts."""
+        wanted = set(names if case_sensitive else (n.casefold() for n in names))
+        return [
+            p
+            for p in self.pins_of(ref)
+            if (p.pinfunction if case_sensitive else p.pinfunction.casefold()) in wanted
+        ]
+
+    def pin_roles(self, ref: str) -> dict[str, tuple[FileNetNode, ...]]:
+        roles: dict[str, list[FileNetNode]] = {}
+        for pin in self.pins_of(ref):
+            roles.setdefault(pin.pinfunction, []).append(pin)
+        return {name: tuple(pins) for name, pins in roles.items()}
+
+    def between(self, a: str, b: str, *, predicate=None) -> list[FileNetComponent]:
+        """Two-terminal components between nets; no implicit component-kind policy."""
+        return [
+            c
+            for c in self.components.values()
+            if (predicate is None or predicate(c))
+            and len(self.pins_of(c.ref)) == 2
+            and {p.net for p in self.pins_of(c.ref)} == {a, b}
+        ]
+
+    def select_components(
+        self,
+        pattern: str = "*",
+        *,
+        lib_id: str = "*",
+        fields: dict[str, str] | None = None,
+        dnp: bool | None = None,
+        on_board: bool | None = None,
+        in_bom: bool | None = None,
+        predicate=None,
+    ):
+        """Caller-defined selection; imposes no count, sourcing, or DNP policy."""
+        from fnmatch import fnmatchcase
+
+        from kicad_evaltor.selectors import Selection
+
+        items = tuple(
+            c
+            for c in self.components.values()
+            if fnmatchcase(c.ref, pattern)
+            and fnmatchcase(c.lib_id, lib_id)
+            and (dnp is None or c.dnp == dnp)
+            and (on_board is None or c.exclude_from_board != on_board)
+            and (in_bom is None or c.exclude_from_bom != in_bom)
+            and all(
+                k in c.fields and fnmatchcase(c.fields[k], v) for k, v in (fields or {}).items()
+            )
+            and (predicate is None or predicate(c))
+        )
+        return Selection(items, pattern, len(self.components))
+
 
 def _pin_sort_key(pin: str) -> tuple[int, int | str]:
     """Numeric pins in number order, then named pins (``A1``, ``EP``) by name."""

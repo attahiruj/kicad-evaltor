@@ -1,4 +1,4 @@
-"""What voltage a linear regulator puts out, read from the schematic.
+"""Configured regulator setpoints under a model, not proof of operation.
 
 "Is this rail 3.3 V?" cannot be answered from a symbol name alone: an
 adjustable LDO with the right divider is as correct as a fixed 3.3 V part. This
@@ -27,7 +27,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -36,7 +36,7 @@ from kicad_evaltor.connectivity import power_rails, ref_prefix
 from kicad_evaltor.netlist import FileNetComponent, FileNetlist, FileNetNode
 from kicad_evaltor.values import parse_value
 
-RegulatorKind = Literal["fixed", "divider", "current_reference"]
+RegulatorKind = Literal["fixed", "divider", "current_reference", "output_reference"]
 
 OUT_PIN_NAMES = ("OUT", "VOUT", "VO", "OUTPUT", "V_OUT")
 FEEDBACK_PIN_NAMES = ("ADJ", "FB", "SET", "ADJ/GND", "SENSE/ADJ", "VFB", "ADJ/NC", "NC/FB", "FB/NC")
@@ -60,11 +60,40 @@ class RegulatorModel:
     out_pins: tuple[str, ...] = OUT_PIN_NAMES
     feedback_pins: tuple[str, ...] = FEEDBACK_PIN_NAMES
     source: str = ""
+    manufacturer: str = ""
+    revision: str = ""
+    package: str = ""
+    out_numbers: tuple[str, ...] = ()
+    feedback_numbers: tuple[str, ...] = ()
+    ground_numbers: tuple[str, ...] = ()
+    preset: Callable[[FileNetlist, str], float | None] | None = None
 
     def __post_init__(self) -> None:
-        needed = {"fixed": "vout", "divider": "vref", "current_reference": "iset"}[self.kind]
+        from math import isfinite
+
+        if self.kind not in ("fixed", "divider", "current_reference", "output_reference"):
+            raise ValueError(f"Unknown regulator kind {self.kind!r}")
+        needed = {
+            "fixed": "vout",
+            "divider": "vref",
+            "output_reference": "vref",
+            "current_reference": "iset",
+        }[self.kind]
         if getattr(self, needed) is None:
             raise ValueError(f"a {self.kind} regulator model needs {needed}")
+        if any(not isfinite(v) for v in (self.vout, self.vref, self.iset) if v is not None):
+            raise ValueError("Regulator parameters must be finite")
+
+
+@dataclass
+class RegulatorModels:
+    """Evaluation-local model registrations; never mutates global defaults."""
+
+    entries: list[tuple[str, RegulatorModel]] = field(default_factory=list)
+    include_builtin: bool = True
+
+    def register(self, pattern: str, model: RegulatorModel) -> None:
+        self.entries.insert(0, (pattern, model))
 
 
 @dataclass
@@ -109,7 +138,9 @@ def clear_registered_regulators() -> None:
     _registered.clear()
 
 
-def regulator_model(lib_id: str, value: str = "", description: str = "") -> RegulatorModel | None:
+def regulator_model(
+    lib_id: str, value: str = "", description: str = "", *, models: RegulatorModels | None = None
+) -> RegulatorModel | None:
     """The model for a part: registered, built in, or read from what it says.
 
     Without a table entry, a fixed output is read from the description KiCad's
@@ -123,9 +154,13 @@ def regulator_model(lib_id: str, value: str = "", description: str = "") -> Regu
     there is no model rather than a guess. A description calling the part
     negative makes a voltage read from the name negative.
     """
-    for pattern, model in [*_registered, *_builtin_models()]:
+    entries = _registered if models is None else models.entries
+    builtin = _builtin_models() if models is None or models.include_builtin else []
+    for pattern, model in [*entries, *builtin]:
         if fnmatch.fnmatchcase(lib_id, pattern):
             return model
+    if models is not None and not models.include_builtin:
+        return None
 
     described = fixed_voltage_from_description(description)
     named: tuple[float, str] | None = None
@@ -222,7 +257,11 @@ def fixed_voltage_from_name(name: str) -> float | None:
 
 
 def regulator_output(
-    netlist: FileNetlist, reference: str, *, model: RegulatorModel | None = None
+    netlist: FileNetlist,
+    reference: str,
+    *,
+    model: RegulatorModel | None = None,
+    models: RegulatorModels | None = None,
 ) -> RegulatorOutput:
     """Work out what ``reference`` outputs in this design."""
     component = netlist.components.get(reference)
@@ -230,7 +269,9 @@ def regulator_output(
     if component is None and not pins:
         return RegulatorOutput(reference, None, reason=f"{reference} is not in the netlist")
     component = component or FileNetComponent(reference)
-    model = model or regulator_model(component.lib_id, component.value, component.description)
+    model = model or regulator_model(
+        component.lib_id, component.value, component.description, models=models
+    )
     if model is None:
         return RegulatorOutput(
             reference,
@@ -239,23 +280,51 @@ def regulator_output(
             "pass model= or call register_regulator",
         )
 
+    if model.preset is not None:
+        preset = model.preset(netlist, reference)
+        if preset is not None:
+            import math
+
+            if not math.isfinite(preset):
+                return RegulatorOutput(
+                    reference, None, reason="preset model returned a non-finite voltage"
+                )
+            return RegulatorOutput(reference, preset, method=f"preset ({model.source})")
     if model.kind == "fixed":
         assert model.vout is not None
         return RegulatorOutput(reference, model.vout, method=f"fixed ({model.source})")
 
-    feedback = _pin_named(pins, model.feedback_pins)
+    feedback = (
+        next((p for p in pins if p.pin in model.feedback_numbers), None)
+        if model.feedback_numbers
+        else _pin_named(pins, model.feedback_pins)
+    )
     if feedback is None:
         return RegulatorOutput(reference, None, reason=f"{reference} has no connected feedback pin")
     grounds = _ground_nets(netlist, pins)
+    if model.ground_numbers:
+        grounds = {p.net for p in pins if p.pin in model.ground_numbers}
     if not grounds:
         return RegulatorOutput(reference, None, reason=f"no ground net found around {reference}")
 
-    if model.kind == "divider":
+    if model.kind in ("divider", "output_reference"):
         assert model.vref is not None
-        out = _pin_named(pins, model.out_pins)
+        out = (
+            next((p for p in pins if p.pin in model.out_numbers), None)
+            if model.out_numbers
+            else _pin_named(pins, model.out_pins)
+        )
         if out is None:
             return RegulatorOutput(
                 reference, None, reason=f"{reference} has no connected output pin"
+            )
+        if out.net in grounds:
+            return RegulatorOutput(reference, None, reason=f"{reference} output pin is grounded")
+        if feedback.net in grounds and model.kind == "output_reference":
+            return RegulatorOutput(
+                reference,
+                _round(model.vref),
+                method=f"Vref {model.vref:g} V above grounded adjustment pin ({model.source})",
             )
         if feedback.net in grounds:
             return RegulatorOutput(reference, None, reason=f"{reference} feedback pin is grounded")
@@ -266,13 +335,14 @@ def regulator_output(
             return RegulatorOutput(reference, None, reason=solved)
         voltages, parts = solved
         ratio = voltages[feedback.net]
-        if ratio <= 0:
+        factor = 1 - ratio if model.kind == "output_reference" else ratio
+        if factor <= 0:
             return RegulatorOutput(
                 reference, None, reason="feedback divider does not reach the output"
             )
         return RegulatorOutput(
             reference,
-            _round(model.vref / ratio),
+            _round(model.vref / factor),
             method=f"Vref {model.vref:g} V through divider ({model.source})",
             parts=parts,
         )
@@ -356,7 +426,7 @@ def _solve(
             if node.ref in resistors:
                 continue
             ohms = parse_value(component.value)
-            if ohms is None or ohms <= 0:
+            if ohms is None or ohms < 0:
                 return f"cannot read {node.ref}'s value {component.value!r} as a resistance"
             other = pins[1].net if pins[0].net == net else pins[0].net
             resistors[node.ref] = (net, other, ohms)
@@ -368,42 +438,16 @@ def _solve(
             seen.add(other)
             queue.append(other)
 
-    index = {net: i for i, net in enumerate(unknown)}
-    size = len(unknown)
-    matrix = [[0.0] * (size + 1) for _ in range(size)]
-    for net, amps in (injected or {}).items():
-        if net in index:
-            matrix[index[net]][size] += amps
-    for a, b, ohms in resistors.values():
-        g = 1.0 / ohms
-        for here, there in ((a, b), (b, a)):
-            if here not in index:
-                continue
-            row = matrix[index[here]]
-            row[index[here]] += g
-            if there in index:
-                row[index[there]] -= g
-            else:
-                row[size] += g * fixed[there]
-    solution = _gauss(matrix)
-    if solution is None:
-        return "the feedback network has no path to a fixed voltage"
-    return {net: solution[i] for net, i in index.items()}, tuple(sorted(resistors))
+    from kicad_evaltor.circuits.resistive import DCNetwork, NetworkUnavailable, Resistor
 
-
-def _gauss(matrix: list[list[float]]) -> list[float] | None:
-    size = len(matrix)
-    for col in range(size):
-        pivot = max(range(col, size), key=lambda r: abs(matrix[r][col]))
-        if abs(matrix[pivot][col]) < 1e-18:
-            return None
-        matrix[col], matrix[pivot] = matrix[pivot], matrix[col]
-        for row in range(size):
-            if row != col and matrix[row][col]:
-                factor = matrix[row][col] / matrix[col][col]
-                for k in range(col, size + 1):
-                    matrix[row][k] -= factor * matrix[col][k]
-    return [matrix[i][size] / matrix[i][i] for i in range(size)]
+    try:
+        network = DCNetwork(Resistor(ref, a, b, ohms) for ref, (a, b, ohms) in resistors.items())
+        solution = network.solve(fixed, injected=injected)
+        if start not in solution.voltages:
+            return "the feedback network has no path to a fixed voltage"
+    except NetworkUnavailable as exc:
+        return f"the feedback network has no path to a fixed voltage: {exc}"
+    return solution.voltages, tuple(sorted(resistors))
 
 
 def _round(volts: float) -> float:

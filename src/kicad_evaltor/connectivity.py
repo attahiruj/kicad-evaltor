@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
+from collections import deque
 from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 
@@ -193,6 +194,26 @@ class Reach:
         return any(n.ref == ref and (pin is None or n.pin == pin) for n in self.nodes)
 
 
+@dataclass(frozen=True)
+class PathStep:
+    reference: str
+    from_pin: str
+    to_pin: str
+    from_net: str
+    to_net: str
+
+
+@dataclass(frozen=True)
+class CircuitPath:
+    start: FileNetNode
+    end: FileNetNode
+    steps: tuple[PathStep, ...]
+
+    @property
+    def nets(self) -> tuple[str, ...]:
+        return (self.start.net, *(s.to_net for s in self.steps))
+
+
 class Connectivity:
     """A netlist seen as a graph of nets joined by conducting parts."""
 
@@ -206,18 +227,87 @@ class Connectivity:
             return []
         return [n for n in self.netlist.nodes_on(net) if (n.ref, n.pin) != (ref, pin)]
 
+    def path(
+        self,
+        a: tuple[str, str],
+        b: tuple[str, str],
+        *,
+        through: Bridge = no_parts,
+        max_crossings: int | None = None,
+        forbidden: Collection[str] = (),
+        stop_at: NetFilter = never,
+        directed=None,
+    ) -> CircuitPath | None:
+        """A shortest crossing-count witness under caller-supplied conduction rules.
+
+        ``directed(component, pins, entry_pin)`` may return permitted exit pin
+        numbers for directional or state-dependent models. No transistor,
+        diode or switch behavior is inferred. Missing endpoints raise; they
+        cannot establish isolation.
+        """
+        if max_crossings is not None and (
+            isinstance(max_crossings, bool)
+            or not isinstance(max_crossings, int)
+            or max_crossings < 0
+        ):
+            raise ValueError("max_crossings must be a nonnegative integer or None")
+        start, end = self.netlist.node(*a), self.netlist.node(*b)
+        if start is None or end is None:
+            raise ValueError(f"Endpoint missing from netlist: {a if start is None else b}")
+        blocked = set(forbidden)
+        if start.net in blocked or end.net in blocked:
+            return None
+        queue: deque[tuple[str, tuple[PathStep, ...]]] = deque([(start.net, ())])
+        seen = {start.net}
+        while queue:
+            net, steps = queue.popleft()
+            if net == end.net:
+                return CircuitPath(start, end, steps)
+            if max_crossings is not None and len(steps) >= max_crossings:
+                continue
+            for entry in self.netlist.nodes_on(net):
+                pins = self.netlist.pins_of(entry.ref)
+                component = _component(self.netlist, entry.ref)
+                exits = (
+                    set(directed(component, pins, entry.pin))
+                    if directed is not None
+                    else {
+                        number
+                        for group in through(component, pins)
+                        if entry.pin in group
+                        for number in group
+                    }
+                )
+                for target in pins:
+                    if target.pin not in exits or target.net in seen or target.net in blocked:
+                        continue
+                    next_net = self.netlist.net(target.net)
+                    if next_net is None or stop_at(next_net):
+                        continue
+                    seen.add(target.net)
+                    step = PathStep(entry.ref, entry.pin, target.pin, net, target.net)
+                    queue.append((target.net, (*steps, step)))
+        return None
+
     def reach(
         self,
         start: str,
         *,
         through: Bridge = two_terminal_passives,
         stop_at: NetFilter = power_rails,
+        max_crossings: int | None = None,
     ) -> Reach:
         """Every net and pin reachable from the net named ``start``.
 
         ``start`` itself is always entered, even when ``stop_at`` would reject
         it, so asking from a rail returns that rail. Unknown nets reach nothing.
         """
+        if max_crossings is not None and (
+            isinstance(max_crossings, bool)
+            or not isinstance(max_crossings, int)
+            or max_crossings < 0
+        ):
+            raise ValueError("max_crossings must be a nonnegative integer or None")
         result = Reach()
         first = self.netlist.net(start)
         if first is None:
@@ -225,9 +315,12 @@ class Connectivity:
 
         queue = [first]
         result.nets.add(first.name)
+        distances = {first.name: 0}
         while queue:
             net = queue.pop(0)
             result.nodes.extend(net.nodes)
+            if max_crossings is not None and distances[net.name] >= max_crossings:
+                continue
             for ref in dict.fromkeys(n.ref for n in net.nodes):
                 for next_net in self._across(ref, net.name, through):
                     if next_net.name in result.nets:
@@ -238,6 +331,7 @@ class Connectivity:
                     if ref not in result.crossed:
                         result.crossed.append(ref)
                     result.nets.add(next_net.name)
+                    distances[next_net.name] = distances[net.name] + 1
                     queue.append(next_net)
         result.stopped -= result.nets
         return result
