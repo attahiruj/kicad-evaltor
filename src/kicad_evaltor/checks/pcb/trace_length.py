@@ -174,5 +174,10 @@ class TraceLengthCheck(Check[TraceLengthParams]):
             die_lengths=(dies[0], dies[1]),
         )
         if length is None:
-            return CheckResult.fail(self.id, f"No routed track joins {start} to {end}", net=first)
+            return CheckResult.error(
+                self.id,
+                f"No track/via path could be measured from {start} to {end}; use pcb.routing.complete to establish connectivity",
+                net=first,
+                reason_code="unsupported_route",
+            )
         return length

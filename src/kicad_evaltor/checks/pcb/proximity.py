@@ -37,6 +37,9 @@ class FootprintNearParams(CheckParams):
     """Instead: an IC reference whose every power-input pin must have a
     capacitor between that pin's net and ground within ``max_distance_mm``."""
     capacitor_prefix: str = "C"
+    return_nets: list[str] | None = None
+    capacitor_references: list[str] | None = None
+    include_dnp: bool = True
 
     def validate(self) -> None:
         if self.max_distance_mm <= 0:
@@ -114,13 +117,26 @@ class FootprintNearCheck(Check[FootprintNearParams]):
         ic_geo = geo.footprint(ic_ref)
         if ic is None or ic_geo is None:
             return CheckResult.fail(self.id, f"Footprint '{ic_ref}' not found on board")
+
+        def ground(net: str) -> bool:
+            return net in p.return_nets if p.return_nets is not None else is_ground(net)
+
         power_nets = sorted(
             {pad.net for pad in ic.pads if pad.pin_type == "power_in" and pad.net}
-            - {net for net in (pad.net for pad in ic.pads) if is_ground(net)}
+            - {net for net in (pad.net for pad in ic.pads) if ground(net)}
         )
         if not power_nets:
             return CheckResult.skip(self.id, f"{ic_ref} has no power-input pins on the board")
-        caps = [fp for fp in board.footprints if _is_cap(fp, p.capacitor_prefix)]
+        caps = [
+            fp
+            for fp in board.footprints
+            if (
+                fp.reference in p.capacitor_references
+                if p.capacitor_references is not None
+                else _is_cap(fp, p.capacitor_prefix)
+            )
+            and (p.include_dnp or not fp.dnp)
+        ]
         pins = []
         failing = []
         required = {
@@ -131,7 +147,7 @@ class FootprintNearCheck(Check[FootprintNearParams]):
             if not ic_pads:
                 return CheckResult.error(self.id, f"Missing geometry for {ic_ref}.{number}")
             net = ic_pads[0].net
-            candidates = [c for c in caps if net in c.nets and any(is_ground(n) for n in c.nets)]
+            candidates = [c for c in caps if net in c.nets and any(ground(n) for n in c.nets)]
             best: tuple[float, str] | None = None
             for cap in candidates:
                 cap_geo = geo.footprint(cap.reference)

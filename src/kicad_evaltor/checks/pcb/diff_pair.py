@@ -33,7 +33,7 @@ class DiffPairParams(CheckParams):
     """Track width on both halves. None takes the net class's diff-pair width."""
     width_tolerance_mm: float = 0.0
     max_uncoupled_mm: float | None = None
-    """Longest stretch, per half, that may run apart from the other half."""
+    """Total sampled length per half that may run apart from the other half."""
     coupling_distance_mm: float | None = None
     """Edge gap beyond which the halves count as uncoupled. None means twice the
     expected gap, or 0.5 mm when no gap is known."""

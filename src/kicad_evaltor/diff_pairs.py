@@ -116,6 +116,8 @@ class PairMeasurement:
     uncoupled_length: dict[str, float] = field(default_factory=dict)
     gap_min: float | None = None
     gap_max: float | None = None
+    method: str = "nearest_track_sampling"
+    resolution_mm: float = 0.05
 
     @property
     def skew(self) -> float:
@@ -138,11 +140,21 @@ def measure_pair(
     reported over coupled points only, which leaves out the pad breakout where a
     pair has to split.
     """
+    if (
+        not math.isfinite(step)
+        or step <= 0
+        or not math.isfinite(coupling_distance)
+        or coupling_distance < 0
+    ):
+        raise ValueError(
+            "step must be finite and positive; coupling_distance finite and nonnegative"
+        )
     tracks = {net: board.tracks_on(net) for net in pair.nets}
     measurement = PairMeasurement(
         lengths={n: board.net_length(n, include_vias=include_vias) for n in pair.nets},
         widths={n: sorted({t.width for t in tracks[n]}) for n in pair.nets},
         vias={n: len(board.vias_on(n)) for n in pair.nets},
+        resolution_mm=step,
     )
     gaps: list[float] = []
     coupled = {n: 0.0 for n in pair.nets}

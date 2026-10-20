@@ -18,7 +18,7 @@ import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
-from kicad_evaltor.board_file import BoardTrack, BoardVia, FileBoard
+from kicad_evaltor.board_file import BoardTrack, BoardVia, FileBoard, arc_circle
 from kicad_evaltor.pcbnew_bridge import BoardGeometry, PadGeometry, point_in_polygon
 
 Node = tuple[float, float, str]
@@ -160,8 +160,21 @@ def _position_along(track: BoardTrack, point: tuple[float, float]) -> float | No
 
     Only straight segments are split; an arc is joined at its ends only.
     """
-    if track.is_arc:
-        return None
+    if track.mid is not None:
+        circle = arc_circle(track.start, track.mid, track.end)
+        if circle is None:
+            return None
+        x, y, radius, start_angle, sweep = circle
+        if abs(math.dist(point, (x, y)) - radius) > track.width / 2:
+            return None
+        angle = math.atan2(point[1] - y, point[0] - x)
+        progress = (
+            (angle - start_angle) % (2 * math.pi)
+            if sweep > 0
+            else (start_angle - angle) % (2 * math.pi)
+        )
+        t = progress / abs(sweep)
+        return t if 0 < t < 1 else None
     (ax, ay), (bx, by) = track.start, track.end
     dx, dy = bx - ax, by - ay
     length2 = dx * dx + dy * dy
@@ -179,6 +192,13 @@ def _point_at(track: BoardTrack, t: float) -> tuple[float, float]:
         return track.start
     if t == 1.0:
         return track.end
+    if track.mid is not None:
+        circle = arc_circle(track.start, track.mid, track.end)
+        if circle is not None:
+            x, y, radius, angle, sweep = circle
+            return x + radius * math.cos(angle + t * sweep), y + radius * math.sin(
+                angle + t * sweep
+            )
     (ax, ay), (bx, by) = track.start, track.end
     return (ax + t * (bx - ax), ay + t * (by - ay))
 
@@ -190,3 +210,51 @@ def _via_layers(board: FileBoard, via: BoardVia) -> list[str]:
         low, high = min(first, last), max(first, last)
         return copper[low : high + 1]
     return copper
+
+
+@dataclass(frozen=True)
+class RouteMeasurement:
+    length_mm: float | None
+    net: str
+    status: str
+    via_height_counted: bool
+    die_lengths_mm: tuple[float, float]
+    method: str = "track_via_graph"
+    limitations: tuple[str, ...] = ()
+
+
+def measure_route(
+    board: FileBoard,
+    geometry: BoardGeometry,
+    net: str,
+    start: PadGeometry | Sequence[PadGeometry],
+    end: PadGeometry | Sequence[PadGeometry],
+    *,
+    include_vias: bool | None = None,
+    die_lengths: tuple[float, float] = (0.0, 0.0),
+) -> RouteMeasurement:
+    """A track/via path measurement with explicit unsupported copper cases.
+
+    This API does not infer a routing defect when the graph has no answer.
+    DRC remains the source for routing completeness. Zone copper and traversal
+    through intermediate pad copper require a different route metric.
+    """
+    vias = board.uses_via_height if include_vias is None else include_vias
+    if any(not math.isfinite(v) or v < 0 for v in die_lengths):
+        raise ValueError("die_lengths must be finite and nonnegative")
+    limitations = []
+    if any(z.net == net and not z.rule_area for z in geometry.zones):
+        limitations.append("Zone copper is excluded from track/via route lengths")
+    length = pad_to_pad_length(
+        board, geometry, net, start, end, include_vias=vias, die_lengths=die_lengths
+    )
+    if length is None:
+        limitations.append("No track/via path; intermediate pad copper may conduct")
+    return RouteMeasurement(
+        length,
+        net,
+        "measured" if length is not None else "unresolved",
+        vias,
+        die_lengths,
+        limitations=tuple(limitations),
+    )
