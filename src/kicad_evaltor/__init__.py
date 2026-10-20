@@ -1,5 +1,7 @@
 from importlib import metadata
 
+from kicad_evaltor.authoring import CircuitQueries, ComponentMeasurement
+from kicad_evaltor.board_connectivity import RouteMeasurement, measure_route
 from kicad_evaltor.board_file import (
     BoardFootprint,
     BoardPad,
@@ -11,6 +13,7 @@ from kicad_evaltor.board_file import (
     NetClasses,
     load_board,
 )
+from kicad_evaltor.board_queries import DecouplingCandidate, decoupling_candidates, pad_distance
 from kicad_evaltor.checks import (
     BoardOutlineCheck,
     Check,
@@ -74,8 +77,12 @@ from kicad_evaltor.checks import (
     ViaRulesCheck,
     register,
 )
+from kicad_evaltor.checks.composition import CompositeCheck, MeasurementCheck
+from kicad_evaltor.circuits import DCNetwork, DCSolution, NetworkUnavailable, Resistor
 from kicad_evaltor.connectivity import (
+    CircuitPath,
     Connectivity,
+    PathStep,
     Reach,
     any_of,
     no_parts,
@@ -87,13 +94,32 @@ from kicad_evaltor.connectivity import (
     whole_part,
 )
 from kicad_evaltor.core import DesignContext, TestReport, TestRunner
+from kicad_evaltor.core.runner import ReportPolicy
+from kicad_evaltor.deliverables import (
+    BOMRow,
+    expand_references,
+    project_rule_settings,
+    read_bom,
+    reconcile_bom,
+)
+from kicad_evaltor.design_index import DesignIndex, SymbolInstance
 from kicad_evaltor.diff_pairs import (
     KICAD_SUFFIXES,
     DiffPair,
     find_diff_pairs,
     measure_pair,
 )
+from kicad_evaltor.drawing_topology import DrawingGroups, wire_groups
+from kicad_evaltor.evidence import json_evidence
 from kicad_evaltor.hierarchy import SchematicTree
+from kicad_evaltor.ink import (
+    InkMeasurement,
+    InkRenderer,
+    InkUnavailable,
+    ink_distance,
+    measure_overlap,
+    svg_ink,
+)
 from kicad_evaltor.models import Component, Net, Pin, Track
 from kicad_evaltor.netlist import (
     FileNet,
@@ -115,6 +141,7 @@ from kicad_evaltor.pin_roles import (
 )
 from kicad_evaltor.regulators import (
     RegulatorModel,
+    RegulatorModels,
     RegulatorOutput,
     register_regulator,
     regulator_model,
@@ -129,11 +156,13 @@ from kicad_evaltor.symbol_library import (
     SymbolLibraries,
     SymbolNotFound,
     SymbolSignature,
+    equivalent_symbols,
     find_symbol_dirs,
     flatten_symbol,
     symbol_diff,
     symbol_signature,
 )
+from kicad_evaltor.toolchain import ToolchainInfo, probe_toolchain, source_identity
 from kicad_evaltor.utils import (
     SubprocessResult,
     filter_violations_by_severity,
@@ -146,6 +175,8 @@ from kicad_evaltor.utils import (
     to_nm,
 )
 from kicad_evaltor.values import (
+    Quantity,
+    parse_quantity,
     parse_value,
     values_match,
 )
@@ -158,6 +189,45 @@ except metadata.PackageNotFoundError:  # not installed, e.g. a bare source tree
     __version__ = "0.0.0.dev0"
 
 __all__ = [
+    "measure_overlap",
+    "DecouplingCandidate",
+    "decoupling_candidates",
+    "equivalent_symbols",
+    "pad_distance",
+    "BOMRow",
+    "CircuitPath",
+    "CircuitQueries",
+    "ComponentMeasurement",
+    "CompositeCheck",
+    "DCNetwork",
+    "DCSolution",
+    "DesignIndex",
+    "DrawingGroups",
+    "InkMeasurement",
+    "InkRenderer",
+    "InkUnavailable",
+    "MeasurementCheck",
+    "NetworkUnavailable",
+    "PathStep",
+    "Quantity",
+    "RegulatorModels",
+    "ReportPolicy",
+    "Resistor",
+    "RouteMeasurement",
+    "SymbolInstance",
+    "ToolchainInfo",
+    "expand_references",
+    "ink_distance",
+    "json_evidence",
+    "measure_route",
+    "parse_quantity",
+    "probe_toolchain",
+    "project_rule_settings",
+    "read_bom",
+    "reconcile_bom",
+    "source_identity",
+    "svg_ink",
+    "wire_groups",
     "BoardFootprint",
     "BoardGeometry",
     "BoardOutlineCheck",
