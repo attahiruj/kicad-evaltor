@@ -25,7 +25,7 @@ from __future__ import annotations
 import itertools
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from kicad_evaltor.geometry import BBox, Placement, normalize_angle, rotate_point
 from kicad_evaltor.schematic_file import FileField, FileSchematic, font_style
@@ -153,6 +153,7 @@ class TextItem:
     # Where the item is anchored on the sheet, which for a label is the point it
     # connects at.
     anchor: Point | None = None
+    uuid: str = ""
 
     @property
     def pieces(self) -> tuple[BBox, ...]:
@@ -257,6 +258,7 @@ class Component:
     properties: Mapping[str, str] = field(default_factory=dict)
     pin_connections: tuple[PinConnection, ...] = ()
     body_parts: tuple[BBox, ...] = ()
+    uuid: str = ""
 
     @property
     def body_pieces(self) -> tuple[BBox, ...]:
@@ -566,7 +568,9 @@ def _text_item(
     )
 
 
-def _component_texts(symbol, owner: str) -> tuple[TextItem, ...]:
+def _component_texts(
+    symbol, owner: str, *, include_power_value: bool = False
+) -> tuple[TextItem, ...]:
     texts: list[TextItem] = []
     is_power = symbol.lib_id.startswith("power:")
     for field_node in symbol.texts:
@@ -575,7 +579,7 @@ def _component_texts(symbol, owner: str) -> tuple[TextItem, ...]:
         # A power symbol's name is drawn by the symbol's own artwork, not as a
         # text field, so its Value property is not rendered even when the file
         # leaves `(hide yes)` off it.
-        if is_power and field_node.name == "Value":
+        if is_power and field_node.name == "Value" and not include_power_value:
             continue
         halign, valign = _justify(field_node)
         # The field's position is stored on the sheet, but its angle and
@@ -596,7 +600,7 @@ def _component_texts(symbol, owner: str) -> tuple[TextItem, ...]:
             bold=field_node.bold,
         )
         if item is not None:
-            texts.append(item)
+            texts.append(replace(item, uuid=getattr(symbol, "uuid", "")))
     return tuple(texts)
 
 
@@ -665,6 +669,7 @@ def extract(schematic: FileSchematic) -> SchematicScene:
             texts=_component_texts(symbol, symbol.reference),
             is_power=symbol.lib_id.startswith("power:"),
             properties=_visible_properties(symbol),
+            uuid=symbol.uuid,
         )
         scene.components.append(component)
         scene.texts.extend(component.texts)
@@ -721,6 +726,6 @@ def extract(schematic: FileSchematic) -> SchematicScene:
                 bold=font.bold,
             )
             if item is not None:
-                scene.texts.append(item)
+                scene.texts.append(replace(item, uuid=value_of(child(node, "uuid"))))
 
     return scene

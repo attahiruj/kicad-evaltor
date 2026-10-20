@@ -80,7 +80,7 @@ class Collision:
         return f"{self.first.label} overlaps {self.second.label}"
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "first": self.first.label,
             "first_kind": self.first.kind,
             "first_properties": dict(self.first.properties),
@@ -92,6 +92,14 @@ class Collision:
             "height": self.height,
             "gap": self.gap,
         }
+        for label, item in (("first", self.first), ("second", self.second)):
+            uuid = getattr(item.group, "uuid", "")
+            if uuid:
+                result[f"{label}_uuid"] = uuid
+                result[f"{label}_field"] = getattr(item.group, "field", None)
+                result[f"{label}_owner"] = item.owner
+                result[f"{label}_reference"] = getattr(item.group, "reference", item.owner)
+        return result
 
 
 def _overlap(a: BBox, b: BBox) -> BBox | None:

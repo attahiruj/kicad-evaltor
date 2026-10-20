@@ -33,7 +33,7 @@ from kicad_evaltor.checks.registry import register
 from kicad_evaltor.collisions import Collision, CollisionItem, colliding_pairs, cross_kind
 from kicad_evaltor.core.context import DesignContext
 from kicad_evaltor.geometry import BBox, Point
-from kicad_evaltor.hierarchy import SheetTarget, select_targets, tree_for
+from kicad_evaltor.hierarchy import AmbiguousSheet, SheetTarget, select_targets, tree_for
 from kicad_evaltor.schematic_file import FileSchematic
 from kicad_evaltor.schematic_items import (
     Component,
@@ -75,6 +75,11 @@ class OverlapParams(CheckParams):
     clearance: float = 0.2
     ignore: list[str] = field(default_factory=list)
     sheet: str | None = None
+    require_complete: bool = False
+    method: str = "bounds"
+    include_own_pins: bool = False
+    include_symbol_pins: bool = False
+    resolution_mm: float = 0.001
 
     def validate(self) -> None:
         # A margin larger than the geometry it applies to collapses boxes, which
@@ -85,6 +90,16 @@ class OverlapParams(CheckParams):
                 raise TypeError(f"{name} must be a number, got {value!r}")
         if self.sheet is not None and not isinstance(self.sheet, str):
             raise TypeError(f"sheet must be a string or None, got {self.sheet!r}")
+        if self.clearance < 0:
+            raise ValueError("clearance must be >= 0")
+        if self.method not in ("bounds", "render"):
+            raise ValueError("method must be bounds or render")
+        if self.resolution_mm <= 0:
+            raise ValueError("resolution_mm must be positive")
+        if self.method == "render" and self.margin != 0:
+            raise ValueError(
+                "Rendered ink uses clearance; box margins apply only to method='bounds'"
+            )
 
 
 # One sheet's findings on their way into a run's totals. ``extra`` accumulates
@@ -115,7 +130,10 @@ def _targets(
     if not isinstance(schematic, FileSchematic):
         return None, CheckResult.skip(check_id, "Layout checks read the .kicad_sch file directly")
     tree = tree_for(schematic)
-    targets, found = select_targets(tree, selector)
+    try:
+        targets, found = select_targets(tree, selector)
+    except AmbiguousSheet as exc:
+        return None, CheckResult.error(check_id, str(exc), reason_code="ambiguous_selection")
     if not found:
         return None, CheckResult.skip(
             check_id, f"Unknown sheet {selector!r}", sheets=[s.name for s in tree.sheets()]
@@ -124,7 +142,7 @@ def _targets(
 
 
 def _over_sheets(
-    ctx: DesignContext, check_id: str, selector: str | None, body
+    ctx: DesignContext, check_id: str, selector: str | None, body, require_complete: bool = False
 ) -> tuple[_Findings | None, CheckResult | None]:
     """Run one sheet's worth of work for each selected sheet and total the findings."""
     targets, blocker = _targets(ctx, check_id, selector)
@@ -132,9 +150,34 @@ def _over_sheets(
         return None, blocker
     if targets is None:
         return None, CheckResult.skip(check_id, "No schematic available")
+    problems = tree_for(ctx.schematic).problems()
+    paths = [t.sheet.path for t in targets]
+    relevant = [
+        p
+        for p in problems
+        if selector is None or selector.strip().lower() == "all" or p.sheet.path in paths
+    ]
+    if require_complete and relevant:
+        return None, CheckResult.error(
+            check_id,
+            "Selected scope is incomplete",
+            reason_code="scope_incomplete",
+            problems=[
+                {"kind": p.kind, "sheet_path": p.sheet.path, "detail": p.detail} for p in relevant
+            ],
+        )
     totals = _Findings()
     for target in targets:
-        totals.add(body(target))
+        try:
+            totals.add(body(target))
+        except Exception as exc:
+            from kicad_evaltor.ink import InkUnavailable
+
+            if not isinstance(exc, InkUnavailable):
+                raise
+            return None, CheckResult.error(
+                check_id, str(exc), reason_code="ink_unavailable", sheet_path=target.sheet.path
+            )
     return totals, None
 
 
@@ -165,6 +208,107 @@ def _whole_text_items(scene: SchematicScene) -> list[CollisionItem]:
 def _distinct(items: list[CollisionItem]) -> int:
     """How many drawn things ``items`` covers, counting a label's pieces once."""
     return len({id(item.group) if item.group is not None else id(item) for item in items})
+
+
+def _rendered_collisions(
+    target: SheetTarget, params: OverlapParams, first_kind: str, second_kind: str
+) -> _Findings:
+    from dataclasses import asdict
+
+    from kicad_evaltor.ink import InkRenderer, InkUnavailable, ink_distance
+    from kicad_evaltor.schematic_items import _component_texts
+
+    scene = target.scene
+    renderers = target.schematic._ink_renderers
+    if params.resolution_mm not in renderers:
+        renderers[params.resolution_mm] = InkRenderer(
+            target.schematic, resolution_mm=params.resolution_mm
+        )
+    renderer = renderers[params.resolution_mm]
+    items: list[CollisionItem] = []
+    if "text" in (first_kind, second_kind):
+        power_texts = [
+            t
+            for s in target.schematic.get_symbols()
+            if s.lib_id.startswith("power:")
+            for t in _component_texts(s, s.reference, include_power_value=True)
+            if t.field == "Value"
+        ]
+        items.extend(
+            CollisionItem("text", t.label, t.bbox, t.owner, group=t)
+            for t in (*scene.texts, *power_texts)
+        )
+    if "symbol" in (first_kind, second_kind):
+        items.extend(
+            CollisionItem(
+                "symbol",
+                c.reference,
+                c.bbox or BBox(c.at.x, c.at.y, c.at.x, c.at.y),
+                c.reference,
+                group=c,
+            )
+            for c in scene.components
+        )
+    items = _drop_ignored(items, params.ignore)
+    evidence = {}
+
+    def ink(item, own):
+        obj = item.group
+        if item.kind == "text":
+            return renderer.object_ink(
+                reference=obj.owner, field=obj.field if obj.owner else None, uuid=obj.uuid or None
+            )
+        return renderer.object_ink(
+            reference=obj.reference,
+            uuid=obj.uuid or None,
+            include_pins=(
+                params.include_symbol_pins
+                if first_kind == second_kind == "symbol"
+                else not own or params.include_own_pins
+            ),
+        )
+
+    def keep(collision):
+        a, b = collision.first, collision.second
+        if (a.kind, b.kind) not in ((first_kind, second_kind), (second_kind, first_kind)):
+            return False
+        own = a.owner is not None and a.owner == b.owner
+        measured = ink_distance(ink(a, own), ink(b, own), error_bound_mm=2 * params.resolution_mm)
+        separation = -measured.overlap_depth_mm if measured.intersects else measured.distance_mm
+        if separation is not None and abs(separation - params.clearance) <= measured.error_bound_mm:
+            raise InkUnavailable(
+                "Requested clearance lies within rendered measurement uncertainty; reduce resolution_mm or inspect the raw measurement"
+            )
+        matches = measured.intersects or (
+            measured.distance_mm is not None and measured.distance_mm < params.clearance
+        )
+        if matches:
+            evidence[(id(a), id(b))] = asdict(measured)
+        return matches
+
+    exact_items = []
+    for item in items:
+        shapes = ink(item, False)
+        box = BBox.union_all(s.bbox for s in shapes)
+        if box is not None:
+            exact_items.append(replace(item, bbox=box))
+
+    # The broad phase must also reach an item whose bound is uncertain by the
+    # renderer resolution. That resolution is never an acceptance tolerance.
+    pairs = colliding_pairs(
+        exact_items, clearance=params.clearance + 2 * params.resolution_mm, keep=keep
+    )
+    details = []
+    for pair in pairs:
+        info = pair.as_dict()
+        info.update(evidence[(id(pair.first), id(pair.second))])
+        info.update(
+            sheet_path=target.sheet.path,
+            first_uuid=getattr(pair.first.group, "uuid", ""),
+            second_uuid=getattr(pair.second.group, "uuid", ""),
+        )
+        details.append(info)
+    return _Findings(summaries=[p.describe() for p in pairs], details=details, checked=len(items))
 
 
 def _symbol_items(scene: SchematicScene, *, include_pins: bool) -> list[CollisionItem]:
@@ -221,7 +365,7 @@ def _report(check_id: str, summaries: list[str], details: list[dict], checked: i
         f"{len(summaries)} {noun} found; first: {summaries[0]}",
         count=len(summaries),
         checked=checked,
-        overlaps=details[:20],
+        overlaps=details,
     )
 
 
@@ -243,7 +387,9 @@ class _OverlapCheck(Check[OverlapParams]):
         return collisions
 
     def run(self, ctx: DesignContext) -> CheckResult:
-        findings, blocker = _over_sheets(ctx, self.id, self.params.sheet, self._run_sheet)
+        findings, blocker = _over_sheets(
+            ctx, self.id, self.params.sheet, self._run_sheet, self.params.require_complete
+        )
         if blocker is not None:
             return blocker
         assert findings is not None
@@ -258,6 +404,14 @@ class _OverlapCheck(Check[OverlapParams]):
         named the same way on every sheet: ``ignore=["SDA"]`` silences ``SDA`` on
         the root and ``Main.SDA`` on a subsheet.
         """
+        if self.params.method == "render":
+            if self.id.endswith("text_text_overlap"):
+                return _rendered_collisions(target, self.params, "text", "text")
+            if self.id.endswith("symbol_symbol_overlap"):
+                return _rendered_collisions(target, self.params, "symbol", "symbol")
+            from kicad_evaltor.ink import InkUnavailable
+
+            raise InkUnavailable(f"Rendered ink is not supported by {self.id}")
         items = _qualified(
             _drop_ignored(self.items(target.scene), self.params.ignore), target.prefix
         )
@@ -266,7 +420,7 @@ class _OverlapCheck(Check[OverlapParams]):
         )
         return _Findings(
             summaries=[c.describe() for c in collisions],
-            details=[c.as_dict() for c in collisions],
+            details=[{**c.as_dict(), "sheet_path": target.sheet.path} for c in collisions],
             checked=_distinct(items),
         )
 
@@ -319,7 +473,9 @@ class TextSymbolOverlapCheck(_OverlapCheck):
         return self.params.clearance
 
     def run(self, ctx: DesignContext) -> CheckResult:
-        findings, blocker = _over_sheets(ctx, self.id, self.params.sheet, self._run_sheet)
+        findings, blocker = _over_sheets(
+            ctx, self.id, self.params.sheet, self._run_sheet, self.params.require_complete
+        )
         if blocker is not None:
             return blocker
         assert findings is not None
@@ -328,6 +484,8 @@ class TextSymbolOverlapCheck(_OverlapCheck):
         return result
 
     def _run_sheet(self, target: SheetTarget) -> _Findings:
+        if self.params.method == "render":
+            return _rendered_collisions(target, self.params, "text", "symbol")
         ignore = self.params.ignore
         clearance = self.required_clearance()
         scene = target.scene
@@ -370,7 +528,7 @@ class TextSymbolOverlapCheck(_OverlapCheck):
         collisions = against(bodies, own_straddle) + against(pinned, foreign)
         return _Findings(
             summaries=[c.describe() for c in collisions],
-            details=[c.as_dict() for c in collisions],
+            details=[{**c.as_dict(), "sheet_path": target.sheet.path} for c in collisions],
             checked=_distinct(texts) + _distinct(pinned),
         )
 
@@ -425,7 +583,9 @@ class SymbolWireOverlapCheck(Check[OverlapParams]):
     Params: ClassVar[type[OverlapParams]] = OverlapParams
 
     def run(self, ctx: DesignContext) -> CheckResult:
-        findings, blocker = _over_sheets(ctx, self.id, self.params.sheet, self._run_sheet)
+        findings, blocker = _over_sheets(
+            ctx, self.id, self.params.sheet, self._run_sheet, self.params.require_complete
+        )
         if blocker is not None:
             return blocker
         assert findings is not None
@@ -552,7 +712,9 @@ class TextOffSheetCheck(_OverlapCheck):
     category = CheckCategory.SCHEMATIC
 
     def run(self, ctx: DesignContext) -> CheckResult:
-        findings, blocker = _over_sheets(ctx, self.id, self.params.sheet, self._run_sheet)
+        findings, blocker = _over_sheets(
+            ctx, self.id, self.params.sheet, self._run_sheet, self.params.require_complete
+        )
         if blocker is not None:
             return blocker
         assert findings is not None
