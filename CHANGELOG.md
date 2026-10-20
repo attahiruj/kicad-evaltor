@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Caller-owned test-authoring APIs: component/pin selection, channel mappings,
+  bounded connectivity witnesses, DC resistor networks, structured quantities,
+  scoped regulator models, BOM reconciliation, drawing groups, and PCB placement
+  measurements. Raw queries work independently of a test runner.
+- Optional measurement/composition checks, report aggregation policies,
+  caller-declared prerequisites, evidence validation, and toolchain/source probes.
+- Optional KiCad SVG ink confirmation for text/text, text/symbol, and
+  symbol/symbol checks, with isolated scratch files and complete findings.
+- Active-project schematic annotation and page resolution, stable symbol
+  identities, explicit ambiguous-sheet selection, and optional scope completeness.
+- Windows fast-test CI and a reusable integration workflow taking a pinned
+  KiCad image digest and an explicit expected tool version.
+
+### Fixed
+
+- DC networks reject every floating component before numerical elimination;
+  pivot scaling retains the original row scales.
+- Rendered overlap checks report uncertain apparent intersections as unavailable
+  measurements, with witnessed overlap depth in raw evidence.
+- Output-reference regulator models accept grounded adjustment pins as a
+  reference-voltage setpoint, while grounded divider feedback remains unresolved.
+- Trailing `R` notation retains its resistance dimension and cannot be interpreted
+  as capacitance or another requested dimension.
+- Legacy bare `hide` tokens are recognized alongside current hidden-field syntax.
+- Machine overlap evidence is no longer truncated after twenty findings.
+- Non-finite check parameters are rejected before evaluation.
+- PCB route graphs accept track/via landings inside arcs; an unresolved route
+  measurement reports an error instead of claiming a routing defect.
+- Subprocess output is decoded explicitly as UTF-8, including partial timeout
+  output. Differential-pair measurements expose their sampling method and step.
+
 ## [0.5.0] - 2026-10-18
 
 Board evaluation, built and tested against a real KiCad 10 board

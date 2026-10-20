@@ -1,10 +1,12 @@
 # kicad-evaltor
 
 A Python library for validating KiCad designs programmatically. Describe the
-properties a design is supposed to have — reference designators, values,
+properties a design is supposed to have, reference designators, values,
 connectivity, footprint assignment, ERC and DRC results, routing, placement,
-copper and fabrication outputs, and whether the sheet is readable — and run them
+copper and fabrication outputs, and whether the sheet is readable, and run them
 as a test suite.
+
+You define the tests, thresholds, and acceptance policy. Evaltor also exposes measurements and queries that work directly in your own pytest tests, without a runner.
 
 Works against **KiCad 10 and later**. It does not need the KiCad IPC API server,
 which KiCad 10 removed, or a running KiCad.
