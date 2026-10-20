@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 
 from kicad_evaltor.edit import (
@@ -39,6 +40,7 @@ from kicad_evaltor.edit import (
     save_document,
 )
 from kicad_evaltor.pcbnew_bridge import dump_board_json
+from kicad_evaltor.toolchain import probe_toolchain, source_identity
 from kicad_evaltor.utils.kicad_cli import find_kicad_cli
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -129,6 +131,23 @@ def main() -> int:
                 for k in ("violations", "unconnected_items", "schematic_parity")
             }
             print(f"{name}: {counts}")
+    identities = []
+    for path in sorted(BOARD_DIR.glob(f"{NAME}.kicad_*")):
+        if path.suffix in (".kicad_sch", ".kicad_pcb", ".kicad_pro"):
+            identity = source_identity(path)
+            identity["path"] = path.relative_to(ROOT).as_posix()
+            identities.append(identity)
+    manifest = {
+        "toolchain": asdict(probe_toolchain(str(cli), include_pcbnew=True, timeout=60)),
+        "sources": identities,
+        "variants": list(VARIANTS),
+        "artifacts": {
+            p.name: source_identity(p)["sha256"]
+            for p in sorted(OUT.glob("*.json"))
+            if p.name != "manifest.json"
+        },
+    }
+    (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return 0
 
 

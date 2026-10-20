@@ -1,0 +1,52 @@
+name: Pinned KiCad integration
+
+# The image must include python3, pip/venv, KiCad CLI, pcbnew and stock libraries.
+# An immutable image is supplied explicitly; the library does not guess the
+# user's KiCad version. This workflow is also callable by a release pipeline.
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "KiCad test image pinned with @sha256:..."
+        required: true
+        type: string
+      version:
+        description: "Exact expected KiCad version, for example 10.0.1"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      image:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      KICAD_IMAGE: ${{ inputs.image }}
+      EXPECTED_KICAD_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify immutable image and run real-tool tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$KICAD_IMAGE" =~ ^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$ ]]
+          [[ "$EXPECTED_KICAD_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          docker run --rm --user root \
+            -e EXPECTED_KICAD_VERSION \
+            -v "$GITHUB_WORKSPACE:/work" -w /work \
+            "$KICAD_IMAGE" bash -euo pipefail -c '
+              python3 -m venv --system-site-packages /tmp/evaltor-test-env
+              /tmp/evaltor-test-env/bin/python -m pip wheel --no-deps --wheel-dir /tmp/evaltor-wheel .
+              /tmp/evaltor-test-env/bin/python -m pip install pytest pytest-cov pytest-mock /tmp/evaltor-wheel/*.whl
+              /tmp/evaltor-test-env/bin/python tools/verify_toolchain.py --expected "$EXPECTED_KICAD_VERSION"
+              /tmp/evaltor-test-env/bin/python -m pytest -m integration
+            '
