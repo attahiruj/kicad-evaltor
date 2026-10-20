@@ -20,6 +20,12 @@ class Selection(Generic[T]):
 
     def require_count(self, minimum: int = 1, maximum: int | None = None) -> "Selection[T]":
         """Raise ValueError for invalid bounds or unexpected selection cardinality."""
+        if (
+            isinstance(minimum, bool)
+            or not isinstance(minimum, int)
+            or (maximum is not None and (isinstance(maximum, bool) or not isinstance(maximum, int)))
+        ):
+            raise TypeError("Selection count bounds must be integers")
         if minimum < 0 or (maximum is not None and maximum < minimum):
             raise ValueError("Invalid selection count bounds")
         if self.count < minimum or (maximum is not None and self.count > maximum):

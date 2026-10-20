@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum
@@ -72,6 +73,7 @@ class CheckResult:
 @dataclass(init=False)
 class CheckParams:
     def __post_init__(self) -> None:
+        _finite_parameters(vars(self))
         self.validate()
 
     def validate(self) -> None:
@@ -133,4 +135,24 @@ def empty_selection(check_id: str, on_empty: str, **details: Any) -> CheckResult
         return CheckResult.fail(
             check_id, "Selection matched no entities", selected_count=0, **details
         )
-    return CheckResult.skip(check_id, "Selection matched no entities", selected_count=0, **details)
+    if on_empty == "skip":
+        return CheckResult.skip(
+            check_id, "Selection matched no entities", selected_count=0, **details
+        )
+    if on_empty == "error":
+        return CheckResult.error(
+            check_id, "Selection matched no entities", selected_count=0, **details
+        )
+    raise ValueError("on_empty must be pass, fail, skip, or error")
+
+
+def _finite_parameters(value: Any, path: str = "params") -> None:
+    """Reject undefined numeric parameters, without choosing design thresholds."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{path} must be finite")
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _finite_parameters(item, f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _finite_parameters(item, f"{path}[{index}]")
