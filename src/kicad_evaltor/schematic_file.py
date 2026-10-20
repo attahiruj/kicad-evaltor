@@ -15,7 +15,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -136,8 +136,10 @@ class FileSymbol:
         on_board: bool = True,
         exclude_from_sim: bool = False,
         lib_name: str | None = None,
+        uuid: str = "",
     ) -> None:
         self.reference = reference
+        self.uuid = uuid
         self.lib_id = lib_id
         # KiCad embeds a placed symbol under its lib_id unless two instances of
         # that lib_id need different copies; it then embeds this one under
@@ -215,14 +217,24 @@ class FileSchematic:
         project_dir: Path | None = None,
         instance_path: str = "/",
         cli_timeout: float = DEFAULT_CLI_TIMEOUT,
+        project_name: str | None = None,
+        root_uuid: str | None = None,
+        document: list[SExpr] | None = None,
     ) -> None:
         self._path = Path(path)
         self._cli_path = cli_path
         self._cli_timeout = cli_timeout
         self._netlists: dict[str, FileNetlist] = {}
+        self._ink_renderers: dict[float, Any] = {}
         self._project_dir = Path(project_dir) if project_dir else None
         self._instance_path = instance_path
-        self._document = self._load()
+        self._project_name = project_name
+        self._document = self._load() if document is None else document
+        self._root_uuid = root_uuid or self.uuid()
+
+    @property
+    def project_name(self) -> str | None:
+        return self._project_name
 
     def _load(self) -> list[SExpr]:
         document = parse(self._path.read_text(encoding="utf-8", errors="replace"))
@@ -272,6 +284,7 @@ class FileSchematic:
                 base_dir=self.base_dir(),
                 parent_dir=self._path.parent,
                 parent_path=self._instance_path,
+                instance_root=self._root_uuid if self._project_name is not None else None,
             )
             for node in children(self._document, "sheet")
         ]
@@ -366,9 +379,22 @@ class FileSchematic:
             properties[name] = text
             fields.append(_field_from(prop, name, text))
 
+        reference = properties.get("Reference", "")
+        unit = int(float(value_of(child(node, "unit")) or 1))
+        if self._project_name is not None:
+            expected_path = f"/{self._root_uuid}{self._instance_path.rstrip('/')}"
+            for project in children(child(node, "instances"), "project"):
+                if value_of(project) != self._project_name:
+                    continue
+                for instance in children(project, "path"):
+                    if value_of(instance).rstrip("/") == expected_path:
+                        reference = value_of(child(instance, "reference")) or reference
+                        unit = int(value_of(child(instance, "unit")) or unit)
+            properties["Reference"] = reference
+            fields = [replace(f, value=reference) if f.name == "Reference" else f for f in fields]
         position = _atom_numbers(child(node, "at"))
         return FileSymbol(
-            reference=properties.get("Reference", ""),
+            reference=reference,
             lib_id=value_of(child(node, "lib_id")),
             value=properties.get("Value", ""),
             footprint=properties.get("Footprint", ""),
@@ -377,7 +403,7 @@ class FileSchematic:
             y=position[1] if len(position) > 1 else 0.0,
             rotation=position[2] if len(position) > 2 else 0.0,
             mirror=value_of(child(node, "mirror")) or None,
-            unit=int(float(value_of(child(node, "unit")) or 1)),
+            unit=unit,
             body_style=int(float(value_of(child(node, "body_style")) or 1)),
             fields=tuple(fields),
             dnp=_flag(node, "dnp", default=False),
@@ -385,6 +411,7 @@ class FileSchematic:
             on_board=_flag(node, "on_board", default=True),
             exclude_from_sim=_flag(node, "exclude_from_sim", default=False),
             lib_name=value_of(child(node, "lib_name")) or None,
+            uuid=value_of(child(node, "uuid")),
         )
 
     def get_netlist(self, format: NetlistFormat = "kicadxml") -> FileNetlist:
@@ -533,6 +560,7 @@ def load_schematic(
     project_dir: Path | None = None,
     instance_path: str = "/",
     cli_timeout: float = DEFAULT_CLI_TIMEOUT,
+    project_name: str | None = None,
 ) -> FileSchematic:
     """Convenience wrapper matching the other loader helpers."""
     return FileSchematic(
@@ -541,6 +569,7 @@ def load_schematic(
         project_dir=project_dir,
         instance_path=instance_path,
         cli_timeout=cli_timeout,
+        project_name=project_name,
     )
 
 

@@ -173,7 +173,12 @@ def join_sheet_path(parent_path: str, uuid: str) -> str:
 
 
 def sheet_from_node(
-    node: list[SExpr], *, base_dir: Path, parent_dir: Path, parent_path: str
+    node: list[SExpr],
+    *,
+    base_dir: Path,
+    parent_dir: Path,
+    parent_path: str,
+    instance_root: str | None = None,
 ) -> Sheet:
     """Read one ``(sheet ...)`` node.
 
@@ -204,7 +209,7 @@ def sheet_from_node(
         y=at[1] if len(at) > 1 else 0.0,
         width=size[0] if size else 0.0,
         height=size[1] if len(size) > 1 else 0.0,
-        pages=_pages(node),
+        pages=_pages(node, parent_path=parent_path, instance_root=instance_root),
         path=join_sheet_path(parent_path, uuid),
         pins=tuple(pin_from_node(pin) for pin in children(node, "pin")),
         properties=properties,
@@ -238,7 +243,9 @@ def label_from_node(node: list[SExpr]) -> HierarchicalLabel:
     )
 
 
-def _pages(node: list[SExpr]) -> dict[str, str]:
+def _pages(
+    node: list[SExpr], *, parent_path: str = "/", instance_root: str | None = None
+) -> dict[str, str]:
     """The ``(page "N")`` a project gives this sheet instance, per project.
 
     Only the page number is read. The rest of the ``(instances ...)`` subtree is
@@ -251,7 +258,12 @@ def _pages(node: list[SExpr]) -> dict[str, str]:
     for project in children(child(node, "instances"), "project"):
         name = value_of(project)
         if name:
-            pages[name] = value_of(child(child(project, "path"), "page"))
+            paths = children(project, "path")
+            if instance_root:
+                expected = f"/{instance_root}{parent_path.rstrip('/')}"
+                paths = [p for p in paths if value_of(p).rstrip("/") == expected]
+            if len(paths) == 1:
+                pages[name] = value_of(child(paths[0], "page"))
     return pages
 
 

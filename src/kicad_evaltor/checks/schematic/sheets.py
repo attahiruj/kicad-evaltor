@@ -43,6 +43,17 @@ class SheetParams(CheckParams):
     """
 
 
+@dataclass
+class SheetCollisionParams(CheckParams):
+    names: bool = True
+    pages: bool = True
+    require_pages: bool = True
+
+    def validate(self) -> None:
+        if any(not isinstance(v, bool) for v in (self.names, self.pages, self.require_pages)):
+            raise TypeError("names, pages and require_pages must be booleans")
+
+
 def _tree(ctx: DesignContext, check_id: str) -> tuple[SchematicTree | None, CheckResult | None]:
     """The sheet tree, or the reason the check cannot run."""
     if not ctx.has_schematic():
@@ -264,7 +275,7 @@ class SheetCycleCheck(Check[SheetParams]):
 
 
 @register
-class SheetNameOrPageCollisionCheck(Check[SheetParams]):
+class SheetNameOrPageCollisionCheck(Check[SheetCollisionParams]):
     """Reports a sheet name used twice among siblings, and a page number used twice.
 
     A duplicate sibling name is ambiguous wherever a name is used to mean one
@@ -283,7 +294,7 @@ class SheetNameOrPageCollisionCheck(Check[SheetParams]):
     name = "Sheet Name Or Page Collision"
     description = "Reports a sheet name or page number used by two sheets"
     category = CheckCategory.SCHEMATIC
-    Params: ClassVar[type[SheetParams]] = SheetParams
+    Params: ClassVar[type[SheetCollisionParams]] = SheetCollisionParams
 
     def run(self, ctx: DesignContext) -> CheckResult:
         tree, blocker = _tree(ctx, self.id)
@@ -293,7 +304,7 @@ class SheetNameOrPageCollisionCheck(Check[SheetParams]):
             return CheckResult.skip(self.id, "No schematic available")
 
         sheets = tree.sheets()
-        duplicate_names = _duplicate_names(tree)
+        duplicate_names = _duplicate_names(tree) if self.params.names else []
         pages = _page_numbers(tree)
         duplicate_pages = [
             {"page": page, "sheets": names}
@@ -301,9 +312,9 @@ class SheetNameOrPageCollisionCheck(Check[SheetParams]):
             # The blank bucket is "unnumbered", not a page number, so two of them
             # are not a collision -- that is what ``unnumbered`` reports, and only
             # when the root shows the design ever tracked pages at all.
-            if page and len(names) > 1
+            if self.params.pages and page and len(names) > 1
         ]
-        unnumbered = pages.get("", []) if _tracks_pages(tree) else []
+        unnumbered = pages.get("", []) if self.params.require_pages and _tracks_pages(tree) else []
 
         found = len(duplicate_names) + len(duplicate_pages) + len(unnumbered)
         if not found:
@@ -374,6 +385,8 @@ def _pages_of(tree: SchematicTree, sheet: Sheet) -> tuple[str, ...]:
     if sheet.path == ROOT_PATH:
         page = tree.root.page_instances().get(ROOT_PATH)
         return (page,) if page else ()
+    if tree.root.project_name is not None:
+        return (sheet.pages.get(tree.root.project_name, ""),)
     return tuple(sheet.pages.values()) or ("",)
 
 

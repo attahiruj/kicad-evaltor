@@ -163,6 +163,11 @@ def is_hidden(node: SExpr | None) -> bool:
     ``(hide no)``, which does not.
     """
     for parent in (node, child(node, "effects")):
+        if isinstance(parent, list) and any(
+            isinstance(atom, str) and not isinstance(atom, Quoted) and atom == "hide"
+            for atom in parent[1:]
+        ):
+            return True
         flag = child(parent, "hide")
         if flag is not None and value_of(flag, default="yes") != "no":
             return True

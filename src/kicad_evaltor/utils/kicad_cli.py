@@ -74,6 +74,8 @@ def run_kicad_cli(
             args,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             cwd=cwd,
             timeout=timeout,
         )
@@ -85,7 +87,11 @@ def run_kicad_cli(
     except subprocess.TimeoutExpired as e:
         return SubprocessResult(
             returncode=-1,
-            stdout=e.stdout.decode() if e.stdout else "",
+            stdout=(
+                e.stdout.decode("utf-8", errors="replace")
+                if isinstance(e.stdout, bytes)
+                else e.stdout or ""
+            ),
             stderr=f"Command timed out after {timeout:g}s",
             timed_out=True,
         )

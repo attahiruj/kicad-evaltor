@@ -44,6 +44,10 @@ UNREADABLE = "unreadable"
 CYCLE = "cycle"
 
 
+class AmbiguousSheet(ValueError):
+    """A readable selector names more than one instance; use its UUID path."""
+
+
 @dataclass(frozen=True)
 class SheetProblem:
     """One thing that stopped part of the tree from being read.
@@ -79,6 +83,7 @@ class SchematicTree:
         self._scenes: dict[str, SchematicScene] = {}
         self._order: list[Sheet] = []
         self._problems: list[SheetProblem] = []
+        self._documents = {root.path.resolve(): root.nodes()}
         self._walk()
 
     @classmethod
@@ -141,17 +146,19 @@ class SchematicTree:
         unambiguous fallback when one file is instantiated twice, and the stem
         is what someone reading a ``Sheetfile`` off disk would type.
         """
-        for sheet in self._order:
-            if sheet.name == name_or_path:
-                return sheet
-        for sheet in self._order:
-            if sheet.path == name_or_path:
-                return sheet
-        for sheet in self._order:
-            if sheet.stem == name_or_path:
-                return sheet
-            if sheet.resolved is not None and sheet.resolved.stem == name_or_path:
-                return sheet
+        for match in (
+            lambda s: s.path == name_or_path,
+            lambda s: s.name == name_or_path,
+            lambda s: (
+                s.stem == name_or_path
+                or (s.resolved is not None and s.resolved.stem == name_or_path)
+            ),
+        ):
+            found = [s for s in self._order if match(s)]
+            if len(found) > 1:
+                raise AmbiguousSheet(f"Ambiguous sheet {name_or_path!r}: {[s.path for s in found]}")
+            if found:
+                return found[0]
         return None
 
     def iter_symbols(self) -> Iterator[tuple[Sheet, FileSymbol]]:
@@ -207,7 +214,10 @@ class SchematicTree:
         if child.resolved is None:
             reason = "no Sheetfile" if not child.filename else "no candidate exists"
             return SheetProblem(MISSING, child, f"{child.filename!r}: {reason}")
-        if any(sheet.resolved == child.resolved for sheet in chain):
+        if any(
+            sheet.resolved is not None and sheet.resolved.resolve() == child.resolved.resolve()
+            for sheet in chain
+        ):
             return SheetProblem(CYCLE, child, chain=_cycle_names(child, chain))
         return None
 
@@ -220,11 +230,15 @@ class SchematicTree:
                 project_dir=self._root.project_dir(),
                 instance_path=child.path,
                 cli_timeout=self._root.cli_timeout(),
+                project_name=self._root.project_name,
+                root_uuid=self._root._root_uuid,
+                document=self._documents.get(child.resolved.resolve()),
             )
         except (OSError, ValueError) as exc:
             self._problems.append(SheetProblem(UNREADABLE, child, str(exc)))
             return None
         self._schematics[child.path] = schematic
+        self._documents[child.resolved.resolve()] = schematic.nodes()
         return schematic
 
 
@@ -344,5 +358,11 @@ def label_prefix(sheet: Sheet) -> str:
 
 def _cycle_names(child: Sheet, chain: tuple[Sheet, ...]) -> tuple[str, ...]:
     """The names from the sheet a cycle re-enters back round to itself."""
-    start = next(i for i, sheet in enumerate(chain) if sheet.resolved == child.resolved)
+    start = next(
+        i
+        for i, sheet in enumerate(chain)
+        if sheet.resolved is not None
+        and child.resolved is not None
+        and sheet.resolved.resolve() == child.resolved.resolve()
+    )
     return (*(sheet.name for sheet in chain[start:]), child.name)

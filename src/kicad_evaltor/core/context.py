@@ -42,6 +42,7 @@ class DesignContext:
         kicad_cli_path: str | None = None,
         timeout_ms: int = 5000,
         cli_timeout: float = DEFAULT_CLI_TIMEOUT,
+        project_name: str | None = None,
     ) -> None:
         if cli_timeout <= 0:
             raise ValueError("cli_timeout must be positive")
@@ -50,6 +51,9 @@ class DesignContext:
         self._board_path = Path(board_path) if board_path else None
         self._kicad_cli_path = kicad_cli_path
         self._cli_timeout = cli_timeout
+        self._project_name = project_name or (
+            self._project_path.stem if self._project_path else None
+        )
 
         self._schematic: FileSchematic | None = None
         self._board: FileBoard | None = None
@@ -73,6 +77,7 @@ class DesignContext:
                 cli_path=self.kicad_cli_path,
                 project_dir=self.project_dir,
                 cli_timeout=self._cli_timeout,
+                project_name=self._project_name,
             )
         return self._schematic
 
@@ -157,6 +162,37 @@ class DesignContext:
         if key not in self._memo:
             self._memo[key] = compute()
         return self._memo[key]  # type: ignore[no-any-return]
+
+    def index(self):
+        """Identity queries without running any checks or choosing thresholds."""
+        from kicad_evaltor.design_index import DesignIndex
+
+        return self.memo("design_index", lambda: DesignIndex(self))
+
+    def toolchain(self, *, include_pcbnew: bool = False):
+        from kicad_evaltor.toolchain import probe_toolchain
+
+        return self.memo(
+            ("toolchain", include_pcbnew),
+            lambda: probe_toolchain(
+                self.kicad_cli_path, include_pcbnew=include_pcbnew, timeout=self.cli_timeout
+            ),
+        )
+
+    def source_identities(self) -> list[dict[str, str]]:
+        """Current on-disk hashes, explicitly requested and never cached."""
+        from kicad_evaltor.toolchain import source_identity
+
+        paths: set[Path] = set()
+        if self.has_schematic():
+            tree = self.sheet_tree()
+            if tree is not None:
+                paths.update(s.resolved for s in tree.sheets() if s.resolved is not None)
+        if self.has_board():
+            paths.add(self.board_path)
+        if self._project_path and self._project_path.is_file():
+            paths.add(self._project_path)
+        return [source_identity(p) for p in sorted(paths)]
 
     def forget(self, key: Any) -> None:
         """Drop one remembered answer, so the next ``memo`` computes it again."""

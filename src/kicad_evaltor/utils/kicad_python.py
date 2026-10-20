@@ -91,6 +91,8 @@ def run_kicad_python(
             [str(python), "-I", str(script), *args],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
