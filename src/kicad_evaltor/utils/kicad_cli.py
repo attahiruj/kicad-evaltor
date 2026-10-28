@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from kicad_evaltor.findings import finding_origin, structured_items
 
 
 @dataclass
@@ -66,6 +69,79 @@ def _version_key(name: str) -> tuple[int, ...]:
     return tuple(int(part) for part in re.findall(r"\d+", name)) or (0,)
 
 
+CHILD_ENV_DROPPED = ("__GLX_VENDOR_LIBRARY_NAME",)
+"""Variables removed from the environment kicad-cli and KiCad's Python start with.
+
+``__GLX_VENDOR_LIBRARY_NAME`` picks the OpenGL vendor library (``nvidia`` on
+hosts set up for GPU rendering). kicad-cli and the ``pcbnew`` module need no
+OpenGL for reports or board reads, yet KiCad 10.0.7 loads the named vendor
+library while it starts and segfaults when it is ``nvidia``, before writing
+anything. The child is only ever a headless run, so the variable is dropped
+rather than passed on.
+"""
+
+
+def kicad_child_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment to start kicad-cli or KiCad's Python with.
+
+    A copy of ``base`` (default: this process's environment) without the
+    variables in :data:`CHILD_ENV_DROPPED`. The host process is not changed.
+    """
+    source = os.environ if base is None else base
+    return {k: v for k, v in source.items() if k not in CHILD_ENV_DROPPED}
+
+
+def describe_failure(result: SubprocessResult) -> str:
+    """Why a kicad-cli run failed, in words, never an empty string.
+
+    A run killed by a signal (out of memory under load, a crash) writes nothing
+    to stderr or stdout, so the exit status is often the only reason there is.
+    It is named, then the last line of stderr and of stdout follow when present.
+    """
+    if result.timed_out:
+        return result.stderr.strip() or "timed out"
+    parts = [_exit_status(result.returncode)]
+    for stream in (result.stderr, result.stdout):
+        lines = [line.strip() for line in stream.splitlines() if line.strip()]
+        if lines:
+            parts.append(lines[-1])
+    return "; ".join(parts)
+
+
+def failure_details(result: SubprocessResult) -> dict[str, Any]:
+    """The facts behind a failed run, for a result's ``details``.
+
+    ``returncode`` is negative when a signal ended the process (POSIX), and -1
+    when it never ran or timed out. ``stderr`` and ``stdout`` are kept to their
+    last 2000 characters.
+    """
+    details: dict[str, Any] = {
+        "returncode": result.returncode,
+        "timed_out": result.timed_out,
+        "stderr": result.stderr[-2000:],
+        "stdout": result.stdout[-2000:],
+    }
+    if result.returncode < -1:
+        details["signal"] = _signal_name(-result.returncode)
+    return details
+
+
+def _exit_status(code: int) -> str:
+    if code < -1:
+        return f"killed by signal {-code} ({_signal_name(-code)})"
+    if code > 0xFFFF:
+        # Windows reports a crash as an NTSTATUS such as 0xC0000005.
+        return f"exit code {code:#x}"
+    return f"exit code {code}"
+
+
+def _signal_name(number: int) -> str:
+    try:
+        return signal.Signals(number).name
+    except ValueError:
+        return f"signal {number}"
+
+
 def run_kicad_cli(
     args: list[str], cwd: Path | str | None = None, timeout: float = DEFAULT_CLI_TIMEOUT
 ) -> SubprocessResult:
@@ -78,6 +154,7 @@ def run_kicad_cli(
             errors="replace",
             cwd=cwd,
             timeout=timeout,
+            env=kicad_child_env(),
         )
         return SubprocessResult(
             returncode=result.returncode,
@@ -226,7 +303,9 @@ def filter_violations_by_severity(
     return [v for v in violations if v.get("severity", "").lower() == severity.lower()]
 
 
-def violation_details(violation: Mapping[str, Any]) -> dict[str, Any]:
+def violation_details(
+    violation: Mapping[str, Any], lib_ids: Mapping[str, str] | None = None
+) -> dict[str, Any]:
     """The reportable fields of one violation.
 
     KiCad calls the human text ``description`` and puts every position in
@@ -234,17 +313,30 @@ def violation_details(violation: Mapping[str, Any]) -> dict[str, Any]:
     those names yields ``None`` for every violation in the report. Projecting
     here keeps one spelling for both checks. ``sheet`` is present only for ERC,
     which is the per-sheet report, and ``source`` only for DRC.
+
+    Each item keeps the report's keys and gains the structured fields of
+    :func:`kicad_evaltor.findings.parse_item` (``kind``, ``reference``,
+    ``pin``, ``pin_name``, ``pin_type``...), plus the symbol's ``lib_id`` when
+    ``lib_ids`` (reference to library id) is given. ``origin`` says whether
+    the finding comes from the design or from the library configuration it
+    was checked in (see :func:`kicad_evaltor.findings.finding_origin`).
+    ``hidden_by`` and ``hidden_kind`` are copied when a check that re-enabled
+    silenced rules set them.
     """
     details: dict[str, Any] = {
         "type": violation.get("type"),
         "severity": violation.get("severity"),
         "description": violation.get("description"),
-        "items": violation.get("items", []),
+        "items": structured_items(violation, lib_ids),
+        "origin": finding_origin(violation),
     }
     if "sheet" in violation:
         details["sheet"] = violation["sheet"]
     if "source" in violation:
         details["source"] = violation["source"]
+    for key in ("hidden_by", "hidden_kind", "project_severity"):
+        if key in violation:
+            details[key] = violation[key]
     return details
 
 

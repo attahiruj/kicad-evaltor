@@ -159,6 +159,7 @@ class SymbolLibraries:
         for path in table_paths:
             self._table.update(read_lib_table(path, variables))
         self._libraries: dict[str, dict[str, list[SExpr]]] = {}
+        self._index: dict[str, tuple[str, ...]] | None = None
 
     def library_path(self, nickname: str) -> Path | None:
         """The file or folder a nickname resolves to, or None."""
@@ -212,6 +213,45 @@ class SymbolLibraries:
         resolved[1] = Quoted(lib_id)
         return resolved
 
+    def nicknames(self) -> list[str]:
+        """Every library nickname on offer: the tables' first, then each folder's."""
+        names = list(self._table)
+        for folder in self.dirs:
+            for path in sorted(folder.glob("*.kicad_sym")) + sorted(folder.glob("*.kicad_symdir")):
+                if path.stem not in names:
+                    names.append(path.stem)
+        return names
+
+    def symbol_index(self) -> dict[str, tuple[str, ...]]:
+        """Every symbol name in every library, mapped to the ``lib_id``s holding it.
+
+        Built on first use by scanning the files for their top-level symbols
+        rather than parsing them, which takes a fraction of a second for the
+        whole stock set, and kept. A library that cannot be read is left out.
+        """
+        if self._index is None:
+            index: dict[str, list[str]] = {}
+            for nickname in self.nicknames():
+                path = self.library_path(nickname)
+                if path is None:
+                    continue
+                try:
+                    names = _symbol_names(path)
+                except OSError:
+                    continue
+                for name in names:
+                    index.setdefault(name, []).append(f"{nickname}:{name}")
+            self._index = {name: tuple(ids) for name, ids in index.items()}
+        return self._index
+
+    def lib_ids_named(self, name: str) -> tuple[str, ...]:
+        """The ``Nickname:Symbol`` ids of every library symbol called ``name``.
+
+        How a copied symbol (``Logger:BQ24074RGT``) is traced back to the
+        stock one (``Battery_Management:BQ24074RGT``) by name alone.
+        """
+        return self.symbol_index().get(name, ())
+
     def __contains__(self, lib_id: object) -> bool:
         if not isinstance(lib_id, str):
             return False
@@ -244,6 +284,26 @@ def _read_library(path: Path) -> dict[str, list[SExpr]]:
             if name:
                 symbols[name] = symbol
     return symbols
+
+
+_TOP_SYMBOL = re.compile(rb'^\t\(symbol "((?:[^"\\]|\\.)*)"', re.M)
+
+
+def _symbol_names(path: Path) -> list[str]:
+    """Top-level symbol names in a library file or ``.kicad_symdir`` folder.
+
+    KiCad writes each top-level symbol one tab in, its units two; a file
+    written some other way is parsed instead.
+    """
+    files = sorted(path.glob("*.kicad_sym")) if path.is_dir() else [path]
+    names: list[str] = []
+    for file in files:
+        data = file.read_bytes()
+        found = [m.group(1).decode("utf-8", "replace") for m in _TOP_SYMBOL.finditer(data)]
+        if not found and b"(symbol" in data:
+            found = list(_read_library(file))
+        names.extend(found)
+    return names
 
 
 # -------------------------------------------------------------- flattening

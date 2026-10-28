@@ -51,8 +51,32 @@ class PadGeometry:
 
 
 @dataclass(frozen=True)
+class InkPiece:
+    """Part of a text's printed ink: everything within ``radius`` of ``points``' outline.
+
+    A stroke of KiCad's stroke font is its two ends with half the stroke width
+    as radius (the stroke has round ends); a filled outline (TrueType or
+    knockout text) is its convex hull with radius 0.
+    """
+
+    points: tuple[Point, ...]
+    radius: float
+
+    def bbox(self) -> tuple[float, float, float, float]:
+        r = self.radius
+        xs, ys = [p[0] for p in self.points], [p[1] for p in self.points]
+        return (min(xs) - r, min(ys) - r, max(xs) + r, max(ys) + r)
+
+
+@dataclass(frozen=True)
 class TextGeometry:
-    """A text item and the box KiCad draws it in. ``owner`` is "" for board text."""
+    """A text item, the box KiCad draws it in, and its ink. ``owner`` is "" for board text.
+
+    ``bbox`` is KiCad's text frame: it leaves room for line spacing and
+    descenders, so it reaches past the letters. ``ink`` is what is printed,
+    stroke width included (see :class:`InkPiece`). It is empty for a text with
+    nothing to print and in recordings made before 0.6.1.
+    """
 
     owner: str
     kind: str
@@ -62,6 +86,20 @@ class TextGeometry:
     height: float
     thickness: float
     bbox: tuple[float, float, float, float]
+    ink: tuple[InkPiece, ...] = ()
+
+    @property
+    def ink_bbox(self) -> tuple[float, float, float, float] | None:
+        """The box around the ink, or None when the dump has no ink."""
+        boxes = [piece.bbox() for piece in self.ink if piece.points]
+        if not boxes:
+            return None
+        return (
+            min(b[0] for b in boxes),
+            min(b[1] for b in boxes),
+            max(b[2] for b in boxes),
+            max(b[3] for b in boxes),
+        )
 
 
 @dataclass(frozen=True)
@@ -263,6 +301,11 @@ def _text(data: dict[str, Any]) -> TextGeometry:
         height=float(data.get("height", 0.0)),
         thickness=float(data.get("thickness", 0.0)),
         bbox=_box(data.get("bbox")) or (0.0, 0.0, 0.0, 0.0),
+        ink=tuple(
+            InkPiece(_polygon(piece["points"]), float(piece.get("radius", 0.0)))
+            for piece in data.get("ink", [])
+            if piece.get("points")
+        ),
     )
 
 

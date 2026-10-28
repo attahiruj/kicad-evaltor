@@ -1,0 +1,401 @@
+{
+ "$schema": "https://schemas.kicad.org/drc.v1.json",
+ "coordinate_units": "mm",
+ "ignored_checks": [
+  {
+   "description": "Footprint has no courtyard defined",
+   "key": "missing_courtyard"
+  },
+  {
+   "description": "Track endpoint not centered on via",
+   "key": "track_not_centered_on_via"
+  },
+  {
+   "description": "Tuning profile track geometries",
+   "key": "tuning_profile_track_geometries"
+  },
+  {
+   "description": "Footprint doesn't match symbol's footprint filters",
+   "key": "footprint_filters_mismatch"
+  },
+  {
+   "description": "PTH inside courtyard",
+   "key": "pth_inside_courtyard"
+  },
+  {
+   "description": "NPTH inside courtyard",
+   "key": "npth_inside_courtyard"
+  }
+ ],
+ "included_severities": [
+  "error",
+  "warning",
+  "exclusion"
+ ],
+ "kicad_version": "10.0.7",
+ "schematic_parity": [
+  {
+   "description": "Field 'LCSC' differs (PCB: 'C52923', Schematic: 'C999999')",
+   "items": [
+    {
+     "description": "Footprint C1",
+     "pos": {
+      "x": 114.6,
+      "y": 129.8
+     },
+     "uuid": "853ac531-c8ae-4201-a8c8-9adc52b82d87"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_field_mismatch"
+  },
+  {
+   "description": "LED_SMD:LED_0603_1608Metric doesn't match footprint given by symbol (Logger:LED_0603_1608Metric)",
+   "items": [
+    {
+     "description": "Footprint D1",
+     "pos": {
+      "x": 102.6,
+      "y": 134.6
+     },
+     "uuid": "01e36e0f-9d1d-483f-a9d2-7962d997d1b2"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "LED_SMD:LED_0603_1608Metric doesn't match footprint given by symbol (Logger:LED_0603_1608Metric)",
+   "items": [
+    {
+     "description": "Footprint D2",
+     "pos": {
+      "x": 102.6,
+      "y": 138.6
+     },
+     "uuid": "9a2ff8f0-3b30-4ecf-b2a9-b3a291edb3a6"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "LED_SMD:LED_0603_1608Metric doesn't match footprint given by symbol (Logger:LED_0603_1608Metric)",
+   "items": [
+    {
+     "description": "Footprint D3",
+     "pos": {
+      "x": 109.4,
+      "y": 114.6
+     },
+     "uuid": "316d7ed0-b236-4b53-84bf-2a4b077a0bc9"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R1",
+     "pos": {
+      "x": 118.2,
+      "y": 135.0
+     },
+     "uuid": "bf095d7a-39fd-4589-8ab0-5960d3974432"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R2",
+     "pos": {
+      "x": 123.2,
+      "y": 137.6
+     },
+     "uuid": "a28471b7-8756-44a1-8dae-85f642a0dcc9"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R3",
+     "pos": {
+      "x": 110.4,
+      "y": 129.6
+     },
+     "uuid": "e0cfa867-dde2-456b-b614-0b6a237b1241"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R4",
+     "pos": {
+      "x": 115.2,
+      "y": 131.4
+     },
+     "uuid": "e9d09967-8735-47e4-9436-c851e99d577c"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R5",
+     "pos": {
+      "x": 112.45,
+      "y": 129.6
+     },
+     "uuid": "c78a783a-fc74-4d9a-a22e-4884fc67e5ff"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R6",
+     "pos": {
+      "x": 108.4,
+      "y": 130.6
+     },
+     "uuid": "d07825e1-72f3-4145-8f95-03aa59e2dd07"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R7",
+     "pos": {
+      "x": 104.2,
+      "y": 134.6
+     },
+     "uuid": "4eb65517-ec9e-4bbb-bac8-7e827b7c34be"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R8",
+     "pos": {
+      "x": 104.2,
+      "y": 138.6
+     },
+     "uuid": "dceb54dc-8b7d-4078-86a1-18a3322ae631"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R9",
+     "pos": {
+      "x": 118.4,
+      "y": 118.0
+     },
+     "uuid": "9e516145-4919-442f-87e4-1081045afbf9"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R10",
+     "pos": {
+      "x": 118.4,
+      "y": 121.6
+     },
+     "uuid": "ae8c947b-007e-431c-9ed4-cd61519c6608"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R11",
+     "pos": {
+      "x": 116.4,
+      "y": 121.8
+     },
+     "uuid": "184a76bf-8a78-423e-8096-ebea512b8e22"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R12",
+     "pos": {
+      "x": 117.2,
+      "y": 113.0
+     },
+     "uuid": "c644046f-525d-43cd-935d-4089b2008c7f"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R13",
+     "pos": {
+      "x": 128.2,
+      "y": 118.8
+     },
+     "uuid": "b5185906-00e1-4a7b-a453-bc2b5f6fe846"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R14",
+     "pos": {
+      "x": 112.4,
+      "y": 114.6
+     },
+     "uuid": "aad0678d-1f8a-41fe-a558-e6ee23b0c929"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R15",
+     "pos": {
+      "x": 123.2,
+      "y": 121.2
+     },
+     "uuid": "826cb208-d666-4485-9da6-84cf5fcb1cf2"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R17",
+     "pos": {
+      "x": 130.0,
+      "y": 130.0
+     },
+     "uuid": "e5ca6863-db5b-4c87-9f53-55a08f49eefd"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R18",
+     "pos": {
+      "x": 130.0,
+      "y": 131.2
+     },
+     "uuid": "61f2294a-4878-49e5-9fee-0794673df129"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R19",
+     "pos": {
+      "x": 130.0,
+      "y": 128.8
+     },
+     "uuid": "36d366c4-6c59-49e4-acf1-cab717fe29d2"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "R_0402_1005Metric doesn't match footprint given by symbol (Resistor_SMD:R_0402_1005Metric)",
+   "items": [
+    {
+     "description": "Footprint R21",
+     "pos": {
+      "x": 130.0,
+      "y": 137.8
+     },
+     "uuid": "21ce063d-e3a5-47df-a611-fa5b201bfcfa"
+    }
+   ],
+   "severity": "warning",
+   "type": "footprint_symbol_mismatch"
+  },
+  {
+   "description": "Extra footprint",
+   "items": [
+    {
+     "description": "Footprint H1",
+     "pos": {
+      "x": 104.0,
+      "y": 109.5
+     },
+     "uuid": "cc3657e5-a9f9-441c-87ef-7844bd4a4059"
+    }
+   ],
+   "severity": "warning",
+   "type": "extra_footprint"
+  }
+ ],
+ "source": "imu.kicad_pcb",
+ "unconnected_items": [],
+ "violations": []
+}

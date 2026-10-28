@@ -1,11 +1,15 @@
 """Regression and mutation cases for user-authored evaluation rules."""
 
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import Mock
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+
+import kicad_evaltor
 
 from kicad_evaltor import (
     ComponentValueCheck,
@@ -21,7 +25,7 @@ from kicad_evaltor.board_file import BoardTrack, BoardVia
 from kicad_evaltor.checks.pcb.matches_schematic import FootprintMatchesSchematicCheck
 from kicad_evaltor.core.runner import TestRunner as Runner
 from kicad_evaltor.netlist import FileNet, FileNetlist, FileNetNode
-from kicad_evaltor.selectors import select
+from kicad_evaltor.selection import select
 from kicad_evaltor.utils.kicad_cli import (
     REPORT_CWD,
     InvalidReport,
@@ -149,6 +153,26 @@ def test_selectors_expose_cardinality():
     assert selected.require_count(2, 2) is selected
     with pytest.raises(ValueError):
         selected.require_count(3)
+
+
+def test_old_selectors_path_still_imports():
+    from kicad_evaltor.selectors import select as old_select
+
+    assert old_select is select
+
+
+def test_package_directory_does_not_shadow_stdlib_selectors():
+    # Python puts the script's directory first on sys.path, so a module named
+    # like a stdlib one inside the package would replace it there.
+    package = Path(kicad_evaltor.__file__).parent
+    assert not (package / "selectors.py").exists()
+    run = subprocess.run(
+        [sys.executable, "-c", "import subprocess, selectors; selectors.DefaultSelector"],
+        cwd=package,
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, run.stderr
 
 
 def test_workspaces_do_not_change_cwd_and_are_context_local():

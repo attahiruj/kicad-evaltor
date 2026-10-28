@@ -23,6 +23,8 @@ from kicad_evaltor.checks.pcb._common import (
 )
 from kicad_evaltor.checks.registry import register
 from kicad_evaltor.core.context import DesignContext
+from kicad_evaltor.findings import finding_references
+from kicad_evaltor.utils.kicad_cli import violation_details
 
 
 @dataclass
@@ -70,10 +72,10 @@ class _DrcRuleCheck(Check[DrcRuleParams]):
             self.id,
             f"{len(found)} {self.what}(s)",
             count=len(found),
-            findings=self.describe(found),
+            findings=self.describe(found, ctx),
         )
 
-    def describe(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def describe(self, entries: list[dict[str, Any]], ctx: DesignContext) -> list[dict[str, Any]]:
         return drc_findings(entries)
 
 
@@ -94,7 +96,7 @@ class RoutingCompleteCheck(_DrcRuleCheck):
     source = "unconnected_items"
     what = "unrouted connection"
 
-    def describe(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def describe(self, entries: list[dict[str, Any]], ctx: DesignContext) -> list[dict[str, Any]]:
         by_net: dict[str, list[list[str]]] = {}
         for entry in entries:
             items = items_of(entry)
@@ -118,6 +120,99 @@ class SchematicParityCheck(_DrcRuleCheck):
     source = "schematic_parity"
     what = "schematic parity issue"
     needs_schematic = True
+
+    def describe(self, entries: list[dict[str, Any]], ctx: DesignContext) -> list[dict[str, Any]]:
+        footprints = _board_footprints(ctx)
+        return [parity_finding(entry, footprints) for entry in entries]
+
+
+PARITY_TAGS = ("board_only_mechanical", "nickname_only", "field_only")
+"""The tags :func:`parity_finding` may put on a schematic parity finding."""
+
+MOUNTING_DRILL_MM = 2.0
+"""Smallest drill, in mm, of the one plated pad that still makes a footprint a
+mounting hole rather than a one-pin part such as a test point."""
+
+_FOOTPRINT_MISMATCH = re.compile(
+    r"^(?P<board>.+?) doesn't match footprint given by symbol \((?P<symbol>.*)\)$"
+)
+_FIELD_MISMATCH = re.compile(r"^Field '(?P<field>[^']*)'")
+
+
+def parity_finding(entry: dict[str, Any], footprints: dict[str, Any] | None) -> dict[str, Any]:
+    """One schematic parity finding with the facts a caller filters on.
+
+    Adds ``reference`` (the footprint, from the item or the description) and
+    ``tags``, any of:
+
+    - ``board_only_mechanical``: an ``extra_footprint`` whose board footprint
+      KiCad marks board-only, or that is excluded from the BOM and has no
+      numbered copper pad (logos, fiducials, unplated holes) or one pad number
+      with a drill of at least :data:`MOUNTING_DRILL_MM` (a plated mounting
+      hole, its via ring included). The footprint's attributes and pad numbers
+      are reported too (``footprint_attributes``, ``pad_numbers``) for callers
+      that draw the line elsewhere.
+    - ``nickname_only``: a ``footprint_symbol_mismatch`` where board and symbol
+      name the same footprint and differ only in the library nickname
+      (``R_0603_1608Metric`` against ``Resistor_SMD:R_0603_1608Metric``). Both
+      names are reported (``board_footprint``, ``symbol_footprint``).
+    - ``field_only``: a ``footprint_symbol_field_mismatch`` (a symbol field
+      such as ``LCSC`` the footprint lacks or holds differently); ``field``
+      names it.
+    """
+    finding = violation_details(entry)
+    refs = [ref for ref in finding_references(entry) if ref]
+    reference = refs[0] if refs else None
+    tags: list[str] = []
+    kind = entry.get("type")
+    description = str(entry.get("description") or "")
+    if kind == "extra_footprint" and footprints is not None and reference in footprints:
+        footprint = footprints[reference]
+        finding["footprint_attributes"] = {
+            attr: bool(getattr(footprint, attr, False))
+            for attr in ("board_only", "exclude_from_bom", "exclude_from_pos_files", "dnp")
+        }
+        finding["pad_numbers"] = sorted(
+            {str(pad.number) for pad in getattr(footprint, "pads", ()) if pad.number}
+        )
+        if _mechanical(footprint):
+            tags.append("board_only_mechanical")
+    elif kind == "footprint_symbol_mismatch" and (m := _FOOTPRINT_MISMATCH.match(description)):
+        finding["board_footprint"] = m["board"]
+        finding["symbol_footprint"] = m["symbol"]
+        if m["board"] != m["symbol"] and _bare(m["board"]) == _bare(m["symbol"]):
+            tags.append("nickname_only")
+    elif kind == "footprint_symbol_field_mismatch":
+        tags.append("field_only")
+        if m := _FIELD_MISMATCH.match(description):
+            finding["field"] = m["field"]
+    finding["reference"] = reference
+    finding["tags"] = tags
+    return finding
+
+
+def _bare(lib_id: str) -> str:
+    return lib_id.split(":", 1)[-1]
+
+
+def _mechanical(footprint: Any) -> bool:
+    if getattr(footprint, "board_only", False):
+        return True
+    if not getattr(footprint, "exclude_from_bom", False):
+        return False
+    pads = list(getattr(footprint, "pads", ()))
+    numbered = {pad.number for pad in pads if pad.number and pad.kind != "np_thru_hole"}
+    if not numbered:
+        return True
+    return len(numbered) == 1 and any((pad.drill or 0.0) >= MOUNTING_DRILL_MM for pad in pads)
+
+
+def _board_footprints(ctx: DesignContext) -> dict[str, Any] | None:
+    try:
+        footprints = ctx.board.get_footprints()
+    except Exception:
+        return None
+    return {str(fp.reference): fp for fp in footprints if getattr(fp, "reference", None)}
 
 
 @register

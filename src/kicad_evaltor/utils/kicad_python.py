@@ -23,6 +23,7 @@ from kicad_evaltor.utils.kicad_cli import (
     SubprocessResult,
     _version_key,
     find_kicad_cli,
+    kicad_child_env,
 )
 
 KICAD_PYTHON_ENV = "KICAD_PYTHON"
@@ -85,7 +86,12 @@ def run_kicad_python(
     *,
     timeout: float = DEFAULT_CLI_TIMEOUT,
 ) -> SubprocessResult:
-    """Run ``script`` under KiCad's interpreter, in isolated mode."""
+    """Run ``script`` under KiCad's interpreter, in isolated mode.
+
+    The child gets :func:`~kicad_evaltor.utils.kicad_cli.kicad_child_env`:
+    importing ``pcbnew`` starts the same KiCad code that crashes kicad-cli
+    under ``__GLX_VENDOR_LIBRARY_NAME=nvidia``.
+    """
     try:
         result = subprocess.run(
             [str(python), "-I", str(script), *args],
@@ -95,6 +101,7 @@ def run_kicad_python(
             errors="replace",
             timeout=timeout,
             check=False,
+            env=kicad_child_env(),
         )
     except subprocess.TimeoutExpired:
         return SubprocessResult(

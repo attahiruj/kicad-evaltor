@@ -8,6 +8,7 @@ from kicad_evaltor.checks.base import (
 from kicad_evaltor.checks.pcb import (
     BoardOutlineCheck,
     CurrentCapacityCheck,
+    DecouplingCoverageCheck,
     DiffPairCheck,
     DRCRunCheck,
     FabExportsCheck,
@@ -79,6 +80,7 @@ __all__ = [
     "ConsistencyCheck",
     "CurrentCapacityCheck",
     "DRCRunCheck",
+    "DecouplingCoverageCheck",
     "DiffPairCheck",
     "ERCRunCheck",
     "FabExportsCheck",

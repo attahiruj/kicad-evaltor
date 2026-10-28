@@ -16,6 +16,10 @@ sheet, so nothing there can be wrong.
 A pin can only be reached by something drawn on the same sheet, so the check
 runs once per selected sheet and totals its findings, exactly as the layout
 checks do. See ``NoConnectParams.sheet``.
+
+A flag need not sit on the pin itself. KiCad accepts one at the far end of a
+short wire drawn from the pin, and so does this check: see
+``NoConnectParams.allow_wire_stub``.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from dataclasses import dataclass, field
 from kicad_evaltor.checks.base import Check, CheckCategory, CheckParams, CheckResult
 from kicad_evaltor.checks.registry import register
 from kicad_evaltor.core.context import DesignContext
+from kicad_evaltor.drawing_topology import wire_groups
 from kicad_evaltor.geometry import Point
 from kicad_evaltor.hierarchy import SheetTarget, select_targets, tree_for
 from kicad_evaltor.schematic_file import FileSchematic
@@ -55,14 +60,26 @@ class NoConnectParams(CheckParams):
     ``sheet`` chooses which sheets to look at: ``None`` for the root sheet only,
     ``"all"`` for every sheet in the tree, or one sheet by name, uuid instance
     path or linked-file stem.
+
+    ``allow_wire_stub`` accepts a flag at the end of a wire whose drawn group
+    reaches exactly one visible pin and carries no label: KiCad's ERC treats the
+    flag as marking that pin, so this matches ERC. A stub that reaches two or
+    more pins, or a label, is a different ERC error (a no-connect on a connected
+    net), and its flag is still reported. Groups follow KiCad's wire rule -- a
+    wire connects only at its ends or at a junction -- so a stub that merely
+    touches another wire part-way along it is still a stub. ``False`` restores
+    the old rule that a flag must sit on a pin.
     """
 
     ignore: list[str] = field(default_factory=list)
     sheet: str | None = None
+    allow_wire_stub: bool = True
 
     def validate(self) -> None:
         if self.sheet is not None and not isinstance(self.sheet, str):
             raise TypeError(f"sheet must be a string or None, got {self.sheet!r}")
+        if not isinstance(self.allow_wire_stub, bool):
+            raise TypeError(f"allow_wire_stub must be a bool, got {self.allow_wire_stub!r}")
 
 
 def _reached_by(point: Point, wire: WireSegment) -> bool:
@@ -123,19 +140,23 @@ class NoConnectFloatingCheck(Check[NoConnectParams]):
         pins = 0
         floating: list[list[float]] = []
         unmarked: list[str] = []
+        stubs: list[dict] = []
         for target in targets or ():
-            sheet_floating, sheet_unmarked = self._sheet_findings(target, ignore)
+            sheet_floating, sheet_unmarked, sheet_stubs = self._sheet_findings(target, ignore)
             flags += len(target.scene.no_connects)
             pins += _drawn_pins(target.scene)
             floating += sheet_floating
             unmarked += sheet_unmarked
+            stubs += sheet_stubs
 
         if not floating and not unmarked:
+            where = "a pin or a wire stub" if stubs else "a pin"
             return CheckResult.pass_(
                 self.id,
-                f"All {flags} flags sit on a pin",
+                f"All {flags} flags sit on {where}",
                 flags=flags,
                 pins=pins,
+                stub_flags=stubs,
                 sheets=[t.sheet.name for t in targets or ()],
             )
         parts = [f"{len(floating)} {_plural(len(floating), 'flag')} marking nothing"]
@@ -146,6 +167,7 @@ class NoConnectFloatingCheck(Check[NoConnectParams]):
             ", ".join(parts),
             floating_flags=floating,
             unmarked_pins=unmarked,
+            stub_flags=stubs,
             flags=flags,
             pins=pins,
             sheets=[t.sheet.name for t in targets or ()],
@@ -153,13 +175,14 @@ class NoConnectFloatingCheck(Check[NoConnectParams]):
 
     def _sheet_findings(
         self, target: SheetTarget, ignore: set[str]
-    ) -> tuple[list[list[float]], list[str]]:
-        """The flags and the unmarked pins on one sheet.
+    ) -> tuple[list[list[float]], list[str], list[dict]]:
+        """The floating flags, the unmarked pins and the stub flags on one sheet.
 
         A flag is reported by where it is drawn, not by a qualified name: it has
         no reference of its own, so ``sheets`` below is what says which sheets a
         run covered. An unmarked pin is qualified by its sheet, since its label
-        already reads ``U1.4``.
+        already reads ``U1.4``. A flag accepted on a wire stub is listed with
+        the pin it marks, so a caller can still see, or refuse, every one.
         """
         scene = target.scene
         pins = [pin for comp in scene.components for pin in comp.pin_connections]
@@ -167,10 +190,24 @@ class NoConnectFloatingCheck(Check[NoConnectParams]):
         # same way an unused symbol pin is.
         sheet_pins = [(pin.x, pin.y) for sheet in target.schematic.sheets() for pin in sheet.pins]
         targets = [pin.at for pin in pins] + sheet_pins
+        on_pin = [
+            flag
+            for flag in scene.no_connects
+            if any(math.dist(flag, point) <= _TOLERANCE for point in targets)
+        ]
+        stub_pins = (
+            _stub_pins(scene, [f for f in scene.no_connects if f not in on_pin])
+            if self.params.allow_wire_stub
+            else {}
+        )
         floating = [
             [flag[0], flag[1]]
             for flag in scene.no_connects
-            if not any(math.dist(flag, point) <= _TOLERANCE for point in targets)
+            if flag not in on_pin and flag not in stub_pins
+        ]
+        stubs = [
+            {"at": [flag[0], flag[1]], "pin": f"{target.prefix}{pin.label}"}
+            for flag, pin in stub_pins.items()
         ]
         unmarked = [
             f"{target.prefix}{pin.label}"
@@ -180,7 +217,45 @@ class NoConnectFloatingCheck(Check[NoConnectParams]):
             and not _marked(scene, pin)
             and not _touches_another_pin(pin, pins)
         ]
-        return floating, unmarked
+        return floating, unmarked, stubs
+
+
+def _stub_pins(scene: SchematicScene, flags: list[Point]) -> dict[Point, PinConnection]:
+    """The pin each flag marks through a wire stub, for flags that do.
+
+    A flag counts when it sits on an end of a wire whose drawn group reaches
+    exactly one visible pin and nothing that names a net: no label anchor and no
+    power symbol. The wire itself already reaches that pin, so the pin is marked
+    without further help.
+    """
+    if not flags:
+        return {}
+    groups = wire_groups(scene, coordinate_tolerance_mm=_TOLERANCE, join_mid_wire=False)
+    visible: dict[int, list[PinConnection]] = {}
+    for comp in scene.components:
+        for pin in comp.pin_connections:
+            root = groups.pins.get((pin.component, pin.number))
+            if root is not None and not pin.hidden:
+                visible.setdefault(root, []).append(pin)
+    # Power symbols are left out of the drawn groups, so they are caught here
+    # with the labels: either one puts the stub on a named net.
+    named = [t.anchor for t in scene.texts if t.field in _LABEL_KINDS and t.anchor is not None]
+    named += [pin.at for comp in scene.power_components for pin in comp.pin_connections]
+    labelled = {
+        groups.wires[i]
+        for i, wire in enumerate(scene.wires)
+        if any(_reached_by(point, wire) for point in named)
+    }
+    found: dict[Point, PinConnection] = {}
+    for flag in flags:
+        for i, wire in enumerate(scene.wires):
+            if min(math.dist(flag, wire.start), math.dist(flag, wire.end)) > _TOLERANCE:
+                continue
+            root = groups.wires[i]
+            if root not in labelled and len(visible.get(root, ())) == 1:
+                found[flag] = visible[root][0]
+                break
+    return found
 
 
 def _touches_another_pin(pin: PinConnection, pins: list[PinConnection]) -> bool:

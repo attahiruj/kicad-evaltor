@@ -59,6 +59,36 @@ class OverlapParams(CheckParams):
     symbol outlines are sampled from a quadratic bulge and pins are modelled as
     bare lines, so both run a fraction of a millimeter large and a small
     negative margin stops that measurement noise from reading as a defect.
+    Shrinking both boxes by ``m`` shrinks their shared region by ``2m`` on each
+    axis, so ``margin=-0.3`` drops exactly the overlaps under 0.6mm in width or
+    height -- but only overlaps: the shrunken pair can still come within
+    ``clearance`` and be reported as a near miss.
+
+    ``min_overlap_mm`` is the plain spelling of that negative margin, and the one
+    to use. A pair counts only when its boxes really overlap by at least this
+    much in both width and height, measured on the boxes as drawn. That is the
+    same set of overlaps ``margin=-min_overlap_mm / 2`` keeps, without the near
+    misses ``clearance`` would add back, so with it set a finding is always a
+    real overlap of that depth. It is applied before a pair of drawn things is
+    reported, so a shallow touch between two pieces of a label cannot hide a deep
+    one between two other pieces. It cannot be combined with a nonzero
+    ``margin``, which would apply the threshold twice. To move a suite that
+    used a negative ``margin`` ``m`` and then kept only overlaps at least ``w``
+    wide and high (measured on the shrunken boxes), use
+    ``min_overlap_mm = w - 2 * m``: each box shrank by ``-m`` on every side, so
+    the shared region lost ``-2m`` on each axis. ``margin=-0.2`` with a 0.6mm
+    filter is ``min_overlap_mm=1.0``, not 0.6. It applies to the
+    box-against-box checks (text/text, text/symbol, text/wire, symbol/symbol).
+    A box depth is a heuristic, not visibility: in the test design's
+    ``overlaps`` variant the ``+3V3`` text shares only 0.36mm of height with
+    R13's box yet its rendered ink touches R13's pin. ``method="render"`` is the test of what is visible,
+    and rejects ``min_overlap_mm``: rendered ink already ignores box-only
+    overlap, and its depth is not measured fully enough to threshold.
+
+    Every box finding carries ``overlap_width_mm`` and ``overlap_height_mm``: the
+    shared region of the two boxes as drawn, 0 on an axis where they only come
+    near each other. ``width``/``height`` stay what they were, the region of the
+    boxes after ``margin``.
 
     ``ignore`` drops named items, which is how a project silences a placement it
     has accepted.
@@ -73,6 +103,7 @@ class OverlapParams(CheckParams):
 
     margin: float = 0.0
     clearance: float = 0.2
+    min_overlap_mm: float = 0.0
     ignore: list[str] = field(default_factory=list)
     sheet: str | None = None
     require_complete: bool = False
@@ -85,9 +116,20 @@ class OverlapParams(CheckParams):
         # A margin larger than the geometry it applies to collapses boxes, which
         # the engine handles, so the only thing worth catching is a value that
         # is not a number at all.
-        for name, value in (("margin", self.margin), ("clearance", self.clearance)):
+        for name, value in (
+            ("margin", self.margin),
+            ("clearance", self.clearance),
+            ("min_overlap_mm", self.min_overlap_mm),
+        ):
             if isinstance(value, bool) or not isinstance(value, int | float):
                 raise TypeError(f"{name} must be a number, got {value!r}")
+        if not math.isfinite(self.min_overlap_mm) or self.min_overlap_mm < 0:
+            raise ValueError("min_overlap_mm must be finite and >= 0")
+        if self.min_overlap_mm and self.margin:
+            raise ValueError(
+                "min_overlap_mm already shrinks the boxes (it is margin=-min_overlap_mm/2); "
+                "set one or the other"
+            )
         if self.sheet is not None and not isinstance(self.sheet, str):
             raise TypeError(f"sheet must be a string or None, got {self.sheet!r}")
         if self.clearance < 0:
@@ -99,6 +141,15 @@ class OverlapParams(CheckParams):
         if self.method == "render" and self.margin != 0:
             raise ValueError(
                 "Rendered ink uses clearance; box margins apply only to method='bounds'"
+            )
+        # Rendered ink already drops the box-only overlaps a minimum depth exists
+        # to ignore, and its overlap depth is a witness that the strokes meet
+        # (measured only until it clears the error bound), not a full depth that
+        # could be compared to a threshold.
+        if self.method == "render" and self.min_overlap_mm:
+            raise ValueError(
+                "min_overlap_mm applies to method='bounds'; rendered ink reports only "
+                "strokes that actually meet"
             )
 
 
@@ -336,6 +387,44 @@ def _drop_ignored(items: list[CollisionItem], ignore: list[str]) -> list[Collisi
     return [item for item in items if item.label not in ignored]
 
 
+def _box_overlap(collision: Collision) -> tuple[float, float]:
+    """Width and height the two boxes, as drawn, share; 0 where they only near."""
+    a, b = collision.first.bbox, collision.second.bbox
+    width = min(a.max_x, b.max_x) - max(a.min_x, b.min_x)
+    height = min(a.max_y, b.max_y) - max(a.min_y, b.min_y)
+    if width <= 0 or height <= 0:
+        return 0.0, 0.0
+    return width, height
+
+
+def _deep_enough(min_overlap_mm: float, keep=None):
+    """A ``keep`` filter for the engine, or ``keep`` itself when there is no minimum.
+
+    It runs inside the engine so a shallow piece pair is never what marks two
+    drawn things as reported.
+    """
+    if not min_overlap_mm:
+        return keep
+
+    def deep(collision: Collision) -> bool:
+        width, height = _box_overlap(collision)
+        if width < min_overlap_mm or height < min_overlap_mm:
+            return False
+        return keep is None or keep(collision)
+
+    return deep
+
+
+def _box_details(collision: Collision, sheet_path: str) -> dict[str, Any]:
+    width, height = _box_overlap(collision)
+    return {
+        **collision.as_dict(),
+        "overlap_width_mm": width,
+        "overlap_height_mm": height,
+        "sheet_path": sheet_path,
+    }
+
+
 def _kind_first(collisions, kind: str) -> list:
     """Order each collision so the given kind comes first.
 
@@ -395,6 +484,7 @@ class _OverlapCheck(Check[OverlapParams]):
         assert findings is not None
         result = _report(self.id, findings.summaries, findings.details, findings.checked)
         result.details["margin"] = self.params.margin
+        result.details["min_overlap_mm"] = self.params.min_overlap_mm
         return result
 
     def _run_sheet(self, target: SheetTarget) -> _Findings:
@@ -416,11 +506,16 @@ class _OverlapCheck(Check[OverlapParams]):
             _drop_ignored(self.items(target.scene), self.params.ignore), target.prefix
         )
         collisions = self.filter(
-            colliding_pairs(items, margin=self.params.margin, clearance=self.required_clearance())
+            colliding_pairs(
+                items,
+                margin=self.params.margin,
+                clearance=self.required_clearance(),
+                keep=_deep_enough(self.params.min_overlap_mm),
+            )
         )
         return _Findings(
             summaries=[c.describe() for c in collisions],
-            details=[{**c.as_dict(), "sheet_path": target.sheet.path} for c in collisions],
+            details=[_box_details(c, target.sheet.path) for c in collisions],
             checked=_distinct(items),
         )
 
@@ -481,6 +576,7 @@ class TextSymbolOverlapCheck(_OverlapCheck):
         assert findings is not None
         result = _report(self.id, findings.summaries, findings.details, findings.checked)
         result.details["margin"] = self.params.margin
+        result.details["min_overlap_mm"] = self.params.min_overlap_mm
         return result
 
     def _run_sheet(self, target: SheetTarget) -> _Findings:
@@ -521,14 +617,17 @@ class TextSymbolOverlapCheck(_OverlapCheck):
 
         def against(symbols: list[CollisionItem], keep) -> list:
             pairs = colliding_pairs(
-                texts + symbols, margin=self.params.margin, clearance=clearance, keep=keep
+                texts + symbols,
+                margin=self.params.margin,
+                clearance=clearance,
+                keep=_deep_enough(self.params.min_overlap_mm, keep),
             )
             return _text_first(pairs)
 
         collisions = against(bodies, own_straddle) + against(pinned, foreign)
         return _Findings(
             summaries=[c.describe() for c in collisions],
-            details=[{**c.as_dict(), "sheet_path": target.sheet.path} for c in collisions],
+            details=[_box_details(c, target.sheet.path) for c in collisions],
             checked=_distinct(texts) + _distinct(pinned),
         )
 

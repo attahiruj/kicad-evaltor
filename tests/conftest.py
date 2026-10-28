@@ -22,6 +22,12 @@ from kicad_evaltor.checks.registry import CheckRegistry
 from kicad_evaltor.netlist import FileNet, FileNetComponent, FileNetlist, FileNetNode
 from kicad_evaltor.utils.kicad_cli import SubprocessResult
 
+# The library starts KiCad without this variable (``kicad_child_env``): set to
+# ``nvidia`` it makes kicad-cli 10.0.7 segfault. Tests that call kicad-cli or
+# KiCad's Python directly inherit this process's environment, so drop it here
+# too; the tests of ``kicad_child_env`` set it back explicitly.
+os.environ.pop("__GLX_VENDOR_LIBRARY_NAME", None)
+
 
 def _version_key(path: Path) -> tuple[int, ...]:
     """Order candidate installs newest-first (KiCad 10.0 beats 8.0)."""

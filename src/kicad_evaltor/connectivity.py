@@ -26,6 +26,7 @@ from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 
 from kicad_evaltor.netlist import FileNet, FileNetComponent, FileNetlist, FileNetNode
+from kicad_evaltor.values import parse_quantity
 
 Bridge = Callable[[FileNetComponent, Sequence[FileNetNode]], Iterable[Collection[str]]]
 """Groups of pin numbers that conduct inside one component; none when it blocks."""
@@ -45,20 +46,39 @@ def _component(netlist: FileNetlist, ref: str) -> FileNetComponent:
     return netlist.components.get(ref) or FileNetComponent(ref=ref)
 
 
-def series_parts(*prefixes: str) -> Bridge:
+def series_parts(*prefixes: str, max_ohms: float | None = None) -> Bridge:
     """Two-pin parts whose reference starts with one of ``prefixes`` conduct.
 
     The prefix is the whole letter part of the reference, so ``"R"`` takes
     ``R7`` but not ``RV1`` or ``RN2``. A part with more or fewer than two
     connected pins never conducts, which keeps a mislabelled network or
     potentiometer from bridging signals it does not join.
+
+    ``max_ohms`` bounds the bridge by value: a part conducts only when its
+    Value reads, by :func:`~kicad_evaltor.values.parse_quantity` as a
+    resistance, at or below the bound. That keeps a 22 ohm series resistor
+    in line while a 10 k pull-up no longer joins its signal to the rail, and
+    ``max_ohms=0`` takes only 0 ohm links. A Value that does not read as a
+    resistance (``2.2uH``, ``BLM18PG221``, ``DNP``, an empty one) does *not*
+    conduct under a bound: an unknown value is never assumed small. Parts
+    rated by something other than resistance, such as ferrite beads and
+    inductors, are given their own unbounded bridge and joined with
+    :func:`any_of`: ``any_of(series_parts("R", max_ohms=1000), series_parts("FB", "L"))``.
     """
     wanted = {p.upper() for p in prefixes}
+    if max_ohms is not None and (
+        isinstance(max_ohms, bool) or not isinstance(max_ohms, (int, float)) or max_ohms < 0
+    ):
+        raise ValueError("max_ohms must be a nonnegative number or None")
 
     def bridge(component: FileNetComponent, pins: Sequence[FileNetNode]) -> list[set[str]]:
-        if ref_prefix(component.ref).upper() in wanted and len(pins) == 2:
-            return [{pins[0].pin, pins[1].pin}]
-        return []
+        if ref_prefix(component.ref).upper() not in wanted or len(pins) != 2:
+            return []
+        if max_ohms is not None:
+            ohms = parse_quantity(component.value, dimension="resistance").value
+            if ohms is None or ohms > max_ohms:
+                return []
+        return [{pins[0].pin, pins[1].pin}]
 
     return bridge
 

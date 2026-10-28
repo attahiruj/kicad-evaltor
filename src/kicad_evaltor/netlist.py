@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -99,6 +99,113 @@ class FileNetlist:
             self._by_name = {net.name: net for net in self.nets}
         return self._by_name.get(name)
 
+    def net_named(self, name: str, *, any_sheet: bool = True) -> FileNet | None:
+        """The net whose name is ``name`` on whichever sheet it was drawn.
+
+        KiCad prefixes a local or hierarchical label with its sheet path, so
+        one design's ground may be ``GND``, ``/GND`` or ``/power/GND``. With
+        ``any_sheet`` (the default) a net matches when its name is ``name``
+        after taking away a sheet path: ``/``, or the sheet path of any
+        component in the netlist (``/power/``). A leading ``/`` on ``name`` is
+        ignored. The sheet path has to be a known one, so ``/shared/PA8/PB0``
+        (a label ``PA8/PB0`` on sheet ``/shared/``) is not found as ``PB0``;
+        a netlist with no components accepts any ``/``-led prefix.
+
+        Returns None when no net matches and raises :class:`AmbiguousNet`,
+        naming every candidate, when more than one does: ``GND`` next to a
+        local ``/power/GND`` are two nets, and picking one would be a guess.
+        With ``any_sheet=False`` this is :meth:`net`.
+        """
+        if not any_sheet:
+            return self.net(name)
+        leaf = name[1:] if name.startswith("/") else name
+        if not leaf:
+            return None
+        sheets = {"", "/"} | {c.sheet_path for c in self.components.values()}
+        found = [
+            net
+            for net in self.nets
+            if net.name.endswith(leaf)
+            and (
+                (prefix := net.name[: len(net.name) - len(leaf)]) in sheets
+                or (not self.components and prefix.startswith("/") and prefix.endswith("/"))
+            )
+        ]
+        if len(found) > 1:
+            raise AmbiguousNet(leaf, tuple(sorted(net.name for net in found)))
+        return found[0] if found else None
+
+    def merged(
+        self,
+        bridge: Callable[[FileNetComponent, Sequence[FileNetNode]], Iterable[Collection[str]]],
+    ) -> MergedNetlist:
+        """A copy in which the nets joined inside conducting parts are one net.
+
+        ``bridge`` is a connectivity bridge (see :mod:`kicad_evaltor.connectivity`),
+        and says which pins of a part conduct, for instance fitted 0 ohm links
+        and ferrite beads::
+
+            netlist.merged(any_of(series_parts("R", max_ohms=0), series_parts("FB")))
+
+        A part marked do-not-populate never joins anything, whatever the bridge
+        says. Each merged net takes the name of one of its members: a named net
+        before an automatic ``Net-(...)`` or ``unconnected-(...)`` one, then
+        the alphabetically first. The result's ``raw_names`` maps each merged
+        name to the original names it covers, ``merged_name`` maps the other
+        way, and ``joined_by`` lists the parts that did the joining, so board
+        lookups can still be made by the raw names.
+        """
+        parent = {net.name: net.name for net in self.nets}
+
+        def root(name: str) -> str:
+            while parent[name] != name:
+                parent[name] = parent[parent[name]]
+                name = parent[name]
+            return name
+
+        crossings: list[tuple[str, str]] = []
+        for component in self.components.values():
+            if component.dnp:
+                continue
+            pins = self.pins_of(component.ref)
+            nets_by_pin = {p.pin: p.net for p in pins}
+            for group in bridge(component, pins):
+                touched = sorted({nets_by_pin[n] for n in group if n in nets_by_pin})
+                if len(touched) < 2:
+                    continue
+                crossings.append((component.ref, touched[0]))
+                for other in touched[1:]:
+                    a, b = root(touched[0]), root(other)
+                    if a != b:
+                        parent[b] = a
+
+        groups: dict[str, list[str]] = {}
+        for net in self.nets:
+            groups.setdefault(root(net.name), []).append(net.name)
+        chosen = {key: min(members, key=_merged_name_key) for key, members in groups.items()}
+        raw_names = {chosen[key]: tuple(sorted(members)) for key, members in groups.items()}
+        merged_name = {net.name: chosen[root(net.name)] for net in self.nets}
+
+        nets: dict[str, FileNet] = {}
+        for net in self.nets:
+            name = merged_name[net.name]
+            target = nets.setdefault(name, FileNet(name, [], code=net.code))
+            if net.name == name:
+                target.code = net.code
+            target.nodes.extend(
+                FileNetNode(n.ref, n.pin, name, n.pinfunction, n.pintype) for n in net.nodes
+            )
+        joins: dict[str, set[str]] = {}
+        for ref, raw in crossings:
+            joins.setdefault(merged_name[raw], set()).add(ref)
+        return MergedNetlist(
+            list(nets.values()),
+            dict(self.components),
+            raw_names=raw_names,
+            merged_name=merged_name,
+            joined_by={k: tuple(sorted(v, key=_ref_sort_key)) for k, v in joins.items()},
+        )
+
     def node(self, ref: str, pin: str) -> FileNetNode | None:
         """The node for pin ``pin`` of ``ref``, or None when it is on no net."""
         if self._by_pin is None:
@@ -172,7 +279,7 @@ class FileNetlist:
         """Caller-defined selection; imposes no count, sourcing, or DNP policy."""
         from fnmatch import fnmatchcase
 
-        from kicad_evaltor.selectors import Selection
+        from kicad_evaltor.selection import Selection
 
         items = tuple(
             c
@@ -188,6 +295,54 @@ class FileNetlist:
             and (predicate is None or predicate(c))
         )
         return Selection(items, pattern, len(self.components))
+
+
+class AmbiguousNet(LookupError):
+    """A net name, read without its sheet path, belongs to more than one net."""
+
+    def __init__(self, name: str, candidates: tuple[str, ...]) -> None:
+        self.name = name
+        self.candidates = candidates
+        super().__init__(
+            f"net name {name!r} matches {len(candidates)} nets: {', '.join(candidates)}; "
+            "ask by the full name"
+        )
+
+
+class MergedNetlist(FileNetlist):
+    """A :class:`FileNetlist` whose nets were joined through conducting parts.
+
+    Made by :meth:`FileNetlist.merged`. Every lookup works as on the original,
+    by merged names. ``raw_names`` maps each merged net to the original nets it
+    covers (itself alone when nothing joined it), ``merged_name`` maps an
+    original net to its merged one, and ``joined_by`` names, per merged net
+    that covers more than one original net, the parts that conduct across it.
+    """
+
+    def __init__(
+        self,
+        nets: list[FileNet],
+        components: dict[str, FileNetComponent] | None = None,
+        *,
+        raw_names: dict[str, tuple[str, ...]],
+        merged_name: dict[str, str],
+        joined_by: dict[str, tuple[str, ...]],
+    ) -> None:
+        super().__init__(nets, components)
+        self.raw_names = raw_names
+        self.merged_name = merged_name
+        self.joined_by = joined_by
+
+
+def _merged_name_key(name: str) -> tuple[int, str]:
+    automatic = name.startswith(("Net-(", "unconnected-("))
+    return (1 if automatic else 0, name)
+
+
+def _ref_sort_key(ref: str) -> tuple[str, int]:
+    letters = ref.rstrip("0123456789")
+    digits = ref[len(letters) :]
+    return (letters, int(digits) if digits else -1)
 
 
 def _pin_sort_key(pin: str) -> tuple[int, int | str]:

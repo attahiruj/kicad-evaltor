@@ -46,7 +46,7 @@ from kicad_evaltor.sheets import (
     label_from_node,
     sheet_from_node,
 )
-from kicad_evaltor.utils.kicad_cli import DEFAULT_CLI_TIMEOUT
+from kicad_evaltor.utils.kicad_cli import DEFAULT_CLI_TIMEOUT, kicad_child_env
 
 # KiCad's standard symbol properties, exposed as `fields` the way kipy does.
 _STANDARD_PROPERTIES = frozenset(
@@ -462,6 +462,7 @@ class FileSchematic:
                     text=True,
                     timeout=self._cli_timeout,
                     check=False,
+                    env=kicad_child_env(),
                 )
             except subprocess.TimeoutExpired as exc:
                 raise NetlistUnavailable(

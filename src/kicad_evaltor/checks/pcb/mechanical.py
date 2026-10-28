@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import fnmatch
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import ClassVar
 
+from kicad_evaltor.board_file import BoardFootprint
+from kicad_evaltor.board_queries import BoardCorner, board_corners, edge_cut_arcs
 from kicad_evaltor.checks.base import Check, CheckCategory, CheckParams, CheckResult
 from kicad_evaltor.checks.pcb._common import geometry
 from kicad_evaltor.checks.registry import register
@@ -27,6 +29,20 @@ class BoardOutlineParams(CheckParams):
     max_height_mm: float | None = None
     min_area_mm2: float | None = None
     max_area_mm2: float | None = None
+    corner_radius_mm: float | None = None
+    """Required radius of the outline's corners; 0 asks for sharp corners."""
+    corner_radius_tolerance_mm: float = 0.1
+    corners: str = "convex"
+    """Which corners ``corner_radius_mm`` applies to: ``"convex"`` (the board's
+    outside corners, default) or ``"all"`` (inside corners of notches too)."""
+
+    def validate(self) -> None:
+        if self.corner_radius_mm is not None and self.corner_radius_mm < 0:
+            raise ValueError("corner_radius_mm must be >= 0")
+        if self.corner_radius_tolerance_mm < 0:
+            raise ValueError("corner_radius_tolerance_mm must be >= 0")
+        if self.corners not in ("convex", "all"):
+            raise ValueError("corners must be 'convex' or 'all'")
 
 
 @register
@@ -36,6 +52,12 @@ class BoardOutlineCheck(Check[BoardOutlineParams]):
     Width and height are the outline's bounding box; area is the outline's own
     area, so rounded corners and cut-outs count. With no size given, only a
     closed outline is required.
+
+    Every corner of the outer outline is reported with its radius (see
+    :func:`~kicad_evaltor.board_queries.board_corners`): an ``Edge.Cuts`` arc's
+    own radius when the corner is drawn as one, otherwise a circle fitted to
+    the outline's points there, and 0 for a sharp corner. ``corner_radius_mm``
+    turns that report into a requirement.
     """
 
     id = "pcb.board.outline"
@@ -58,13 +80,15 @@ class BoardOutlineCheck(Check[BoardOutlineParams]):
         p = self.params
         x0, y0, x1, y1 = outline.bbox
         width, height = round(x1 - x0, 4), round(y1 - y0, 4)
-        details = {
+        details: dict[str, object] = {
             "width_mm": width,
             "height_mm": height,
             "area_mm2": round(outline.area, 3),
             "outlines": len(outline.polygons),
             "cutouts": len(outline.holes),
         }
+        corners = _corners(ctx, outline)
+        details["corners"] = [asdict(c) for c in corners]
         issues = []
         if p.width_mm is not None and abs(width - p.width_mm) > p.tolerance_mm:
             issues.append(f"width {width}mm, expected {p.width_mm}mm")
@@ -78,6 +102,20 @@ class BoardOutlineCheck(Check[BoardOutlineParams]):
             issues.append(f"area {outline.area:.1f}mm² < min {p.min_area_mm2}mm²")
         if p.max_area_mm2 is not None and outline.area > p.max_area_mm2:
             issues.append(f"area {outline.area:.1f}mm² > max {p.max_area_mm2}mm²")
+        if p.corner_radius_mm is not None:
+            judged = [c for c in corners if p.corners == "all" or c.convex]
+            if not judged:
+                issues.append("the outline has no corners to measure")
+            off = [
+                c
+                for c in judged
+                if abs(c.radius_mm - p.corner_radius_mm) > p.corner_radius_tolerance_mm
+            ]
+            if off:
+                issues.append(
+                    f"{len(off)} corner(s) not R{p.corner_radius_mm:g}mm: "
+                    + ", ".join(f"R{c.radius_mm:g} at ({c.x:g}, {c.y:g})" for c in off)
+                )
         if issues:
             return CheckResult.fail(self.id, "Board outline: " + "; ".join(issues), **details)
         return CheckResult.pass_(self.id, f"Closed outline {width} x {height} mm", **details)
@@ -234,12 +272,38 @@ class MountingHolesParams(CheckParams):
     diameter_tolerance_mm: float = 0.05
     min_edge_distance_mm: float | None = None
     """Least distance from a hole's edge to the board edge."""
-    match: str = "MountingHole:*"
-    """Which footprints are mounting holes: a wildcard over lib_id."""
+    max_edge_distance_mm: float | None = None
+    """Greatest distance from a hole's edge to the board edge, for holes that
+    must sit near the edge. Measured like ``min_edge_distance_mm``."""
+    match: str | None = "*MountingHole*"
+    """Which footprints are mounting holes: a wildcard over the footprint name.
+    The library nickname is not needed: a footprint saved as
+    ``MountingHole_2.7mm_M2.5`` (as scripts often write it) matches the same as
+    ``MountingHole:MountingHole_2.7mm_M2.5``. None turns name matching off."""
+    match_drill_min_mm: float | None = None
+    """Also count any footprint whose largest drill is at least this, whatever
+    it is called, e.g. 2.0 for holes placed from a custom footprint."""
+
+    def validate(self) -> None:
+        if self.match is None and self.match_drill_min_mm is None:
+            raise ValueError("Give match, match_drill_min_mm or both")
+        for name in ("min_edge_distance_mm", "max_edge_distance_mm", "match_drill_min_mm"):
+            value = getattr(self, name)
+            if value is not None and value < 0:
+                raise ValueError(f"{name} must be >= 0")
 
 
 @register
 class MountingHolesCheck(Check[MountingHolesParams]):
+    """The board has the mounting holes asked for, of the right size and place.
+
+    A footprint is a hole when its name matches ``match`` (with or without its
+    library nickname) or, if ``match_drill_min_mm`` is set, when its largest
+    drill is at least that. A plated hole ringed with vias
+    (``MountingHole_3.2mm_M3_Pad_Via``) is one hole: its size is its largest
+    drill. Edge distance runs from the drill's edge to the nearest board edge.
+    """
+
     id = "pcb.mounting_holes"
     name = "Mounting Holes"
     description = "Checks the number, size and edge distance of mounting holes"
@@ -250,28 +314,35 @@ class MountingHolesCheck(Check[MountingHolesParams]):
         if not ctx.has_board():
             return CheckResult.skip(self.id, "No board available")
         p = self.params
-        holes = [fp for fp in ctx.board.footprints if fnmatch.fnmatchcase(fp.lib_id, p.match)]
+        holes = [fp for fp in ctx.board.footprints if self._is_hole(fp)]
         issues: list[str] = []
         found: list[dict[str, object]] = []
         geo = None
-        if p.min_edge_distance_mm is not None:
+        if p.min_edge_distance_mm is not None or p.max_edge_distance_mm is not None:
             geo, error = geometry(ctx, self.id)
             if error is not None:
                 return error
         for fp in holes:
-            drills = [pad.drill for pad in fp.pads if pad.drill]
-            drill = max(drills) if drills else None
-            entry: dict[str, object] = {"reference": fp.reference, "drill_mm": drill}
+            drill = _largest_drill(fp)
+            entry: dict[str, object] = {
+                "reference": fp.reference,
+                "footprint": fp.lib_id,
+                "drill_mm": drill,
+            }
             if p.diameter_mm is not None and (
                 drill is None or abs(drill - p.diameter_mm) > p.diameter_tolerance_mm
             ):
                 issues.append(f"{fp.reference} drill {drill}mm, expected {p.diameter_mm}mm")
-            if geo is not None and p.min_edge_distance_mm is not None:
+            if geo is not None:
                 gap = geo.outline.distance_to_edge(fp.x, fp.y) - (drill or 0) / 2
                 entry["edge_distance_mm"] = round(gap, 4)
-                if gap < p.min_edge_distance_mm:
+                if p.min_edge_distance_mm is not None and gap < p.min_edge_distance_mm:
                     issues.append(
                         f"{fp.reference} is {gap:.2f}mm from the edge < {p.min_edge_distance_mm}mm"
+                    )
+                if p.max_edge_distance_mm is not None and gap > p.max_edge_distance_mm:
+                    issues.append(
+                        f"{fp.reference} is {gap:.2f}mm from the edge > {p.max_edge_distance_mm}mm"
                     )
             found.append(entry)
         if len(holes) < p.min_count:
@@ -281,6 +352,32 @@ class MountingHolesCheck(Check[MountingHolesParams]):
         if issues:
             return CheckResult.fail(self.id, "; ".join(issues), holes=found)
         return CheckResult.pass_(self.id, f"{len(holes)} mounting hole(s) as required", holes=found)
+
+    def _is_hole(self, fp: BoardFootprint) -> bool:
+        p = self.params
+        if p.match is not None:
+            name = fp.lib_id.split(":", 1)[-1]
+            if fnmatch.fnmatchcase(fp.lib_id, p.match) or fnmatch.fnmatchcase(name, p.match):
+                return True
+        if p.match_drill_min_mm is not None:
+            drill = _largest_drill(fp)
+            return drill is not None and drill >= p.match_drill_min_mm
+        return False
+
+
+def _largest_drill(fp: BoardFootprint) -> float | None:
+    drills = [pad.drill for pad in fp.pads if pad.drill]
+    return max(drills) if drills else None
+
+
+def _corners(ctx: DesignContext, outline: OutlineGeometry) -> tuple[BoardCorner, ...]:
+    # Exact radii come from the file's arcs; without the file (or with corners
+    # drawn as segments) they are fitted from pcbnew's outline points.
+    try:
+        arcs = edge_cut_arcs(ctx.board.path)
+    except (OSError, AttributeError, TypeError):
+        arcs = ()
+    return board_corners(outline, arcs)
 
 
 def _shape(fp: FootprintGeometry) -> tuple[Polygon, ...]:

@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import tomllib
 from importlib import metadata
 from pathlib import Path
 
@@ -16,6 +15,8 @@ class TestVersion:
         assert kicad_evaltor.__version__ == metadata.version("kicad-evaltor")
 
     def test_version_is_not_written_down_twice(self) -> None:
+        # tomllib is standard library from Python 3.11; 3.10 is still supported.
+        tomllib = pytest.importorskip("tomllib")
         pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
         declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
 

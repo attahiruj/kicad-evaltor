@@ -24,6 +24,11 @@ class FootprintMatchesSchematicParams(CheckParams):
     check_pins: bool = True
     """Also require every symbol pin number to have a pad on the footprint. Pin
     numbers come from kicad-cli's netlist export."""
+    ignore_library_nickname: bool = False
+    """Accept a footprint whose name matches the symbol's Footprint field when
+    only the library nickname differs or is missing, as in a board written by
+    a script: ``R_0603_1608Metric`` for ``Resistor_SMD:R_0603_1608Metric``.
+    Such pairs are still listed, under ``ignored``."""
 
     def validate(self) -> None:
         if self.on_empty not in ("pass", "fail", "skip"):
@@ -38,6 +43,13 @@ class FootprintMatchesSchematicCheck(Check[FootprintMatchesSchematicParams]):
     name differs from its symbol's Footprint field. This check asks the same
     question without running DRC and adds one DRC does not: that the footprint
     has a pad for each of the symbol's pin numbers, so no pin is left unplaced.
+
+    Each mismatch carries a ``kind``: ``"missing"`` (no footprint on the
+    board), ``"name"`` (a different footprint), ``"nickname_only"`` (the same
+    footprint name, but the library nickname differs or is absent on one side)
+    or ``"pads"`` (a symbol pin with no pad). Callers that accept nickname-only
+    differences say so with ``ignore_library_nickname``; pad mismatches
+    always fail.
     """
 
     id = "pcb.footprint.matches_schematic"
@@ -78,31 +90,54 @@ class FootprintMatchesSchematicCheck(Check[FootprintMatchesSchematicParams]):
             except NetlistUnavailable as exc:
                 return CheckResult.error(self.id, f"Cannot read symbol pins: {exc}")
 
-        mismatches = []
+        mismatches: list[dict[str, object]] = []
+        ignored: list[dict[str, object]] = []
         for ref, symbol in sorted(symbols.items()):
             fp = board.footprint(ref)
             if fp is None:
-                mismatches.append({"reference": ref, "issue": "no footprint on the board"})
+                mismatches.append(
+                    {"reference": ref, "kind": "missing", "issue": "no footprint on the board"}
+                )
                 continue
             expected = symbol.footprint.text.value
             if expected and expected != fp.lib_id:
-                mismatches.append(
-                    {"reference": ref, "issue": f"footprint {fp.lib_id}, symbol names {expected}"}
-                )
+                same_name = _name(expected) == _name(fp.lib_id)
+                entry: dict[str, object] = {
+                    "reference": ref,
+                    "kind": "nickname_only" if same_name else "name",
+                    "issue": f"footprint {fp.lib_id}, symbol names {expected}",
+                    "footprint": fp.lib_id,
+                    "symbol_footprint": expected,
+                }
+                (ignored if same_name and p.ignore_library_nickname else mismatches).append(entry)
             if netlist is not None:
                 pins = {node.pin for node in netlist.pins_of(ref)}
                 pads = {pad.number for pad in fp.pads if pad.number}
                 missing = sorted(pins - pads)
                 if missing:
                     mismatches.append(
-                        {"reference": ref, "issue": f"no pad for pin(s) {', '.join(missing)}"}
+                        {
+                            "reference": ref,
+                            "kind": "pads",
+                            "issue": f"no pad for pin(s) {', '.join(missing)}",
+                            "missing_pads": missing,
+                        }
                     )
         if mismatches:
             return CheckResult.fail(
                 self.id,
                 f"{len(mismatches)} footprint(s) do not match the schematic",
                 mismatches=mismatches,
+                ignored=ignored,
             )
         return CheckResult.pass_(
-            self.id, f"All {len(symbols)} footprints match their symbols", checked=len(symbols)
+            self.id,
+            f"All {len(symbols)} footprints match their symbols",
+            checked=len(symbols),
+            ignored=ignored,
         )
+
+
+def _name(lib_id: str) -> str:
+    """The footprint name without its library nickname."""
+    return lib_id.split(":", 1)[-1]

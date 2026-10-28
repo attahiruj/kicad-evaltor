@@ -173,3 +173,85 @@ def values_match(a: float, b: float, tolerance: float) -> bool:
     if b == 0:
         return abs(a) <= tolerance
     return abs(a - b) <= abs(b) * tolerance
+
+
+@dataclass(frozen=True)
+class FieldQuantity:
+    """A quantity read from one of a component's fields, and which field.
+
+    ``field`` is ``"Value"``, ``"Description"`` or the custom field's name,
+    and ``text`` that field's text; both are empty when no field gave a
+    quantity, and ``quantity.reason`` then says which fields were tried.
+    """
+
+    quantity: Quantity
+    field: str
+    text: str = ""
+
+    @property
+    def value(self) -> float | None:
+        return self.quantity.value
+
+    @property
+    def known(self) -> bool:
+        return self.quantity.known
+
+
+_TOLERANCE = re.compile(r"(?:±|\+/-|\+-|-/\+)\s*\d+(?:\.\d+)?\s*%|\b\d+(?:\.\d+)?\s*%")
+_NOT_QUANTITY_FIELDS = frozenset({"Footprint", "Datasheet", "Value", "Description", "Reference"})
+
+
+def quantity_of(component: object, dimension: str) -> FieldQuantity:
+    """The ``dimension`` quantity of a component, from whichever field holds it.
+
+    Tries the Value, then the Description, then every other field in the
+    order the component lists them (Footprint and Datasheet excepted), and
+    returns the first that reads. A tolerance (``±1%``, ``+/-1%``, ``1%``)
+    is removed before reading, and rating text after the number is ignored
+    when its unit says it is something else (``10uF 16V X5R`` is 10 uF).
+
+    The Value may be a bare number (``10k``, ``100n``) taking ``dimension``.
+    Any other field has to say its unit (``10kΩ``, ``2.2uH``, ``2R2``),
+    because free text is full of numbers that are not the part's value
+    (``0402``, ``M2``, a part number). Works with a netlist
+    :class:`~kicad_evaltor.netlist.FileNetComponent` and with anything that has
+    ``value``, ``description`` and a ``fields`` mapping.
+    """
+    if dimension not in set(_UNITS.values()):
+        raise ValueError(f"Unknown dimension {dimension!r}")
+    fields = getattr(component, "fields", None)
+    fields = fields if isinstance(fields, dict) else {}
+    description = getattr(component, "description", "") or fields.get("Description", "")
+    candidates: list[tuple[str, str]] = [
+        ("Value", str(getattr(component, "value", "") or "")),
+        ("Description", str(description or "")),
+    ]
+    candidates.extend(
+        (str(name), str(text or ""))
+        for name, text in fields.items()
+        if name not in _NOT_QUANTITY_FIELDS
+    )
+    tried: list[str] = []
+    for name, text in candidates:
+        if not text.strip():
+            continue
+        tried.append(name)
+        quantity = _read_field(text, dimension, bare=name == "Value")
+        if quantity is not None:
+            return FieldQuantity(quantity, name, text)
+    reason = f"no {dimension} in {', '.join(tried)}" if tried else "no field has text"
+    return FieldQuantity(Quantity(None, dimension, "", reason), "")
+
+
+def _read_field(text: str, dimension: str, *, bare: bool) -> Quantity | None:
+    """One field's quantity; a unitless number only when ``bare`` and it leads."""
+    cleaned = _TOLERANCE.sub(" ", text).strip().replace("µ", "u").replace("μ", "u")
+    quantity = parse_quantity(cleaned, dimension=dimension)
+    if quantity.value is None and bare and cleaned:
+        # "10k 1% 0402": the leading word is the value, the rest is a rating.
+        quantity = parse_quantity(cleaned.split()[0], dimension=dimension)
+    if quantity.value is None:
+        return None
+    if parse_quantity(quantity.token).dimension == dimension:
+        return quantity
+    return quantity if bare and cleaned.startswith(quantity.token) else None

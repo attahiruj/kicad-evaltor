@@ -1,7 +1,22 @@
+import sys
 from importlib import metadata
 
-from kicad_evaltor.authoring import CircuitQueries, ComponentMeasurement
-from kicad_evaltor.board_connectivity import RouteMeasurement, measure_route
+from kicad_evaltor import selection as _selection
+from kicad_evaltor.authoring import (
+    CircuitQueries,
+    ComponentMeasurement,
+    Resistance,
+    ResistorChain,
+    Strap,
+)
+from kicad_evaltor.board_connectivity import (
+    PathMeasurement,
+    PathSegment,
+    RouteMeasurement,
+    measure_path_length,
+    measure_route,
+    pad_to_pad_length,
+)
 from kicad_evaltor.board_file import (
     BoardFootprint,
     BoardPad,
@@ -13,7 +28,15 @@ from kicad_evaltor.board_file import (
     NetClasses,
     load_board,
 )
-from kicad_evaltor.board_queries import DecouplingCandidate, decoupling_candidates, pad_distance
+from kicad_evaltor.board_queries import (
+    BoardCorner,
+    DecouplingCandidate,
+    EdgeArc,
+    board_corners,
+    decoupling_candidates,
+    edge_cut_arcs,
+    pad_distance,
+)
 from kicad_evaltor.checks import (
     BoardOutlineCheck,
     Check,
@@ -27,6 +50,7 @@ from kicad_evaltor.checks import (
     ComponentValueCheck,
     ConsistencyCheck,
     CurrentCapacityCheck,
+    DecouplingCoverageCheck,
     DiffPairCheck,
     DRCRunCheck,
     ERCRunCheck,
@@ -109,8 +133,30 @@ from kicad_evaltor.diff_pairs import (
     find_diff_pairs,
     measure_pair,
 )
-from kicad_evaltor.drawing_topology import DrawingGroups, wire_groups
+from kicad_evaltor.drawing_topology import (
+    DrawingGroups,
+    LabelOnlyLink,
+    label_only_links,
+    wire_groups,
+)
 from kicad_evaltor.evidence import json_evidence
+from kicad_evaltor.findings import (
+    finding_origin,
+    findings_owned_by,
+    is_owned_by,
+    parse_item,
+    structured_items,
+)
+from kicad_evaltor.footprint_library import (
+    ChipSizeMatch,
+    CopperComparison,
+    FootprintLibraries,
+    FootprintNotFound,
+    chip_size_from_copper,
+    compare_copper,
+    compare_to_library,
+    find_footprint_dirs,
+)
 from kicad_evaltor.hierarchy import SchematicTree
 from kicad_evaltor.ink import (
     InkMeasurement,
@@ -122,10 +168,27 @@ from kicad_evaltor.ink import (
 )
 from kicad_evaltor.models import Component, Net, Pin, Track
 from kicad_evaltor.netlist import (
+    AmbiguousNet,
     FileNet,
     FileNetComponent,
     FileNetlist,
     FileNetNode,
+    MergedNetlist,
+)
+from kicad_evaltor.parts import (
+    FieldMatch,
+    FoundPart,
+    LedColor,
+    PartNotFound,
+    PinMatch,
+    SignalPins,
+    fields_matching,
+    find_part,
+    led_colors,
+    pins_named,
+    signal_pins,
+    text_of,
+    wavelength_color,
 )
 from kicad_evaltor.pcbnew_bridge import (
     BoardGeometry,
@@ -136,7 +199,10 @@ from kicad_evaltor.pcbnew_bridge import (
 )
 from kicad_evaltor.pin_roles import (
     PairRule,
+    PinNameMatch,
     classify,
+    match_pin_name,
+    normalise_pin_name,
     usb_polarity,
 )
 from kicad_evaltor.regulators import (
@@ -174,12 +240,21 @@ from kicad_evaltor.utils import (
     to_mm,
     to_nm,
 )
+from kicad_evaltor.utils.kicad_cli import kicad_child_env
 from kicad_evaltor.values import (
+    FieldQuantity,
     Quantity,
     parse_quantity,
     parse_value,
+    quantity_of,
     values_match,
 )
+
+# ``kicad_evaltor.selection`` was ``kicad_evaltor.selectors`` until 0.6.1. A file
+# by that name shadowed the standard library's ``selectors`` (and broke
+# ``import subprocess``) whenever Python started inside the package directory, so
+# the old import path lives on only as this alias, which no file can shadow.
+sys.modules.setdefault(f"{__name__}.selectors", _selection)
 
 # Read from the installed distribution so pyproject.toml stays the only place a
 # version is written down.
@@ -358,4 +433,52 @@ __all__ = [
     "usb_polarity",
     "values_match",
     "whole_part",
+    "AmbiguousNet",
+    "BoardCorner",
+    "ChipSizeMatch",
+    "CopperComparison",
+    "DecouplingCoverageCheck",
+    "EdgeArc",
+    "FieldMatch",
+    "FieldQuantity",
+    "FootprintLibraries",
+    "FootprintNotFound",
+    "FoundPart",
+    "LabelOnlyLink",
+    "LedColor",
+    "MergedNetlist",
+    "PartNotFound",
+    "PathMeasurement",
+    "PathSegment",
+    "PinMatch",
+    "PinNameMatch",
+    "Resistance",
+    "ResistorChain",
+    "SignalPins",
+    "Strap",
+    "board_corners",
+    "chip_size_from_copper",
+    "compare_copper",
+    "compare_to_library",
+    "edge_cut_arcs",
+    "fields_matching",
+    "find_footprint_dirs",
+    "find_part",
+    "finding_origin",
+    "findings_owned_by",
+    "is_owned_by",
+    "kicad_child_env",
+    "label_only_links",
+    "led_colors",
+    "match_pin_name",
+    "measure_path_length",
+    "normalise_pin_name",
+    "pad_to_pad_length",
+    "parse_item",
+    "pins_named",
+    "quantity_of",
+    "signal_pins",
+    "structured_items",
+    "text_of",
+    "wavelength_color",
 ]

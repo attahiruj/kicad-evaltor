@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from kicad_evaltor.selectors import Selection, select
+from kicad_evaltor.selection import Selection, select
 
 if TYPE_CHECKING:
     from kicad_evaltor.core.context import DesignContext

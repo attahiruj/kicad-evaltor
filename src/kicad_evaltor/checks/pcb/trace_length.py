@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from kicad_evaltor.board_connectivity import pad_to_pad_length
+from kicad_evaltor.board_connectivity import RouteMeasurement, measure_route
 from kicad_evaltor.checks.base import Check, CheckCategory, CheckParams, CheckResult
 from kicad_evaltor.checks.pcb._common import geometry
 from kicad_evaltor.checks.registry import register
@@ -91,7 +91,9 @@ class TraceLengthCheck(Check[TraceLengthParams]):
     Lengths are counted the way KiCad's DRC and length tuning count them: track
     length (arcs as arcs), plus via height when the project says so, plus pad-to-
     die lengths. On the example board every net matches KiCad's DRC to 0.0001 mm.
-    A pad-to-pad length is the shortest route through the net's tracks and vias.
+    A pad-to-pad length is the shortest route through the net's tracks and vias
+    and across the copper of the net's pads, so a route through an in-line
+    part's pads (a flow-through ESD array) measures; ``pads_crossed`` names them.
     """
 
     id = "pcb.trace.length"
@@ -111,13 +113,16 @@ class TraceLengthCheck(Check[TraceLengthParams]):
             measured = self._pad_to_pad(ctx, params.from_pad, params.to_pad)
             if isinstance(measured, CheckResult):
                 return measured
-            length = measured
+            assert measured.length_mm is not None
+            length = measured.length_mm
+            route = {"net": measured.net, "pads_crossed": list(measured.pads_crossed)}
         else:
             assert params.net is not None
             what = f"net {params.net}"
             if params.net not in board.nets:
                 return CheckResult.fail(self.id, f"Net '{params.net}' not found on board")
             length = board.net_length(params.net, include_vias=params.include_vias)
+            route = {}
 
         low, high = length_limits(
             params.min_length_mm,
@@ -133,6 +138,7 @@ class TraceLengthCheck(Check[TraceLengthParams]):
             "via_height_counted": (
                 board.uses_via_height if params.include_vias is None else params.include_vias
             ),
+            **route,
         }
         if low is not None and length < low:
             return CheckResult.fail(self.id, f"{what}: {length:.3f}mm < min {low:g}mm", **details)
@@ -140,7 +146,9 @@ class TraceLengthCheck(Check[TraceLengthParams]):
             return CheckResult.fail(self.id, f"{what}: {length:.3f}mm > max {high:g}mm", **details)
         return CheckResult.pass_(self.id, f"{what}: {length:.3f}mm within limits", **details)
 
-    def _pad_to_pad(self, ctx: DesignContext, start: str, end: str) -> float | CheckResult:
+    def _pad_to_pad(
+        self, ctx: DesignContext, start: str, end: str
+    ) -> RouteMeasurement | CheckResult:
         geo, error = geometry(ctx, self.id)
         if error is not None:
             return error
@@ -164,7 +172,7 @@ class TraceLengthCheck(Check[TraceLengthParams]):
                 f"{start} ({first or 'no net'}) and {end} ({second or 'no net'}) "
                 "are not on the same net",
             )
-        length = pad_to_pad_length(
+        measured = measure_route(
             ctx.board,
             geo,
             first,
@@ -173,11 +181,14 @@ class TraceLengthCheck(Check[TraceLengthParams]):
             include_vias=self.params.include_vias,
             die_lengths=(dies[0], dies[1]),
         )
-        if length is None:
+        if measured.length_mm is None:
             return CheckResult.error(
                 self.id,
-                f"No track/via path could be measured from {start} to {end}; use pcb.routing.complete to establish connectivity",
+                f"No copper path could be measured from {start} to {end}: {measured.reason}; "
+                "use pcb.routing.complete to establish connectivity",
                 net=first,
                 reason_code="unsupported_route",
+                route_reason=measured.reason_code,
+                pieces=measured.pieces,
             )
-        return length
+        return measured

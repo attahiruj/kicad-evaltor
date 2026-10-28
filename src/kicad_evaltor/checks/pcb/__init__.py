@@ -26,7 +26,7 @@ from kicad_evaltor.checks.pcb.mechanical import (
 )
 from kicad_evaltor.checks.pcb.net_rules import LengthMatchCheck, NetLayersCheck, NetViasCheck
 from kicad_evaltor.checks.pcb.power_pour import PowerPourCheck
-from kicad_evaltor.checks.pcb.proximity import FootprintNearCheck
+from kicad_evaltor.checks.pcb.proximity import DecouplingCoverageCheck, FootprintNearCheck
 from kicad_evaltor.checks.pcb.silkscreen import ReferenceVisibleCheck, TextOffBoardCheck
 from kicad_evaltor.checks.pcb.trace_length import TraceLengthCheck
 from kicad_evaltor.checks.pcb.trace_width import TraceWidthCheck
@@ -35,6 +35,7 @@ __all__ = [
     "BoardOutlineCheck",
     "CurrentCapacityCheck",
     "DRCRunCheck",
+    "DecouplingCoverageCheck",
     "DiffPairCheck",
     "FabExportsCheck",
     "FootprintExistsCheck",

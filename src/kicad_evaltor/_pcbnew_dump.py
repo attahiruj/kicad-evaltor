@@ -15,6 +15,7 @@ from pathlib import Path
 import pcbnew
 
 NM = 1_000_000.0
+INK_MAX_ERROR_NM = 1000
 
 
 def mm(value):
@@ -44,6 +45,63 @@ def polygons(poly_set, holes=False):
     return found
 
 
+def _hull(points):
+    """Convex hull of [x, y] points, counter-clockwise (Andrew's monotone chain)."""
+    pts = sorted({(p[0], p[1]) for p in points})
+    if len(pts) < 3:
+        return [list(p) for p in pts]
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower, upper = [], []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return [list(p) for p in lower[:-1] + upper[:-1]]
+
+
+def ink(item):
+    """The text's printed ink, as pieces ``{"points": [[x, y], ...], "radius": r}``.
+
+    With a radius, a piece is a round-ended stroke along its points, half the
+    stroke width wide each side; with radius 0 it is a filled convex outline.
+    Either way the ink reaches farthest at a point plus the radius. This is
+    where the ink ends, unlike the text's frame box (``bbox``), which leaves
+    room for line spacing and descenders.
+
+    Stroke-font text (KiCad's default) comes from ``GetEffectiveTextShape()``,
+    whose segments carry the stroke width (a segment's box already includes
+    half of it); segments that continue one another are chained into one
+    stroke. Other text (TrueType fonts, knockout) comes from
+    ``TransformTextToPolySet``, the outline KiCad plots, with its round parts
+    approximated to within 1 µm outside the real ink, each piece reduced to its
+    convex hull (the hull's corners are points of the outline, so the farthest
+    reach in any direction is unchanged, and the recording stays small).
+    """
+    knockout = item.IsKnockout() if hasattr(item, "IsKnockout") else False
+    shape = item.GetEffectiveTextShape()
+    pieces = list(shape.GetSubshapes()) if hasattr(shape, "GetSubshapes") else [shape]
+    if pieces and not knockout and all(hasattr(piece, "GetSeg") for piece in pieces):
+        found = []
+        for piece in pieces:
+            seg = piece.GetSeg()
+            a, b, radius = point(seg.A), point(seg.B), mm(piece.GetWidth()) / 2
+            if found and found[-1]["radius"] == radius and found[-1]["points"][-1] == a:
+                found[-1]["points"].append(b)
+            else:
+                found.append({"points": [a, b], "radius": radius})
+        return found
+    outline = pcbnew.SHAPE_POLY_SET()
+    item.TransformTextToPolySet(outline, 0, INK_MAX_ERROR_NM, pcbnew.ERROR_OUTSIDE)
+    return [{"points": _hull(p["outline"]), "radius": 0.0} for p in polygons(outline)]
+
+
 def text_entry(board, item, owner, kind):
     return {
         "owner": owner,
@@ -54,6 +112,7 @@ def text_entry(board, item, owner, kind):
         "height": mm(item.GetTextHeight()),
         "thickness": mm(item.GetTextThickness()),
         "bbox": bbox(item.GetBoundingBox()),
+        "ink": ink(item),
     }
 
 

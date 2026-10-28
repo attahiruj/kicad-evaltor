@@ -16,6 +16,9 @@ from kicad_evaltor.core.context import DesignContext
 from kicad_evaltor.pcbnew_bridge import BoardGeometry, GeometryUnavailable
 from kicad_evaltor.utils.kicad_cli import (
     InvalidReport,
+    SubprocessResult,
+    describe_failure,
+    failure_details,
     parse_drc_report,
     report_workspace,
     violation_details,
@@ -32,6 +35,9 @@ class DrcRun:
     ran: bool = False
     """kicad-cli ran and exited cleanly; an error after that (no report) means
     something is wrong with the run, not that the tool is missing."""
+    failure: dict[str, Any] = field(default_factory=dict)
+    """Exit code, signal, stderr and stdout of a run that failed (see
+    :func:`~kicad_evaltor.utils.kicad_cli.failure_details`); empty otherwise."""
 
     def of_types(self, *types: str, source: str | None = None) -> list[dict[str, Any]]:
         return [
@@ -104,9 +110,10 @@ def _run_drc(
                 error=f"DRC did not finish: {result.stderr}; raise the check's timeout "
                 "or the context's cli_timeout",
                 timed_out=True,
+                failure=failure_details(result),
             )
         if not result.success:
-            return DrcRun(error=f"DRC command failed: {result.stderr.strip() or result.stdout}")
+            return _failed(result)
         if not report.exists():
             return DrcRun(error=f"DRC report not written to {report}", ran=True)
         try:
@@ -116,8 +123,19 @@ def _run_drc(
         return DrcRun(entries=entries, ran=True)
 
 
+def _failed(result: SubprocessResult) -> DrcRun:
+    # A killed run (out of memory under load, a crash) prints nothing, so the
+    # exit status is named rather than leaving "DRC command failed: " bare.
+    return DrcRun(
+        error=f"DRC command failed: {describe_failure(result)}",
+        failure=failure_details(result),
+    )
+
+
 def drc_error(check_id: str, run: DrcRun) -> CheckResult:
-    return CheckResult.error(check_id, run.error or "DRC failed", timed_out=run.timed_out)
+    return CheckResult.error(
+        check_id, run.error or "DRC failed", **{**run.failure, "timed_out": run.timed_out}
+    )
 
 
 def items_of(entry: dict[str, Any]) -> list[str]:

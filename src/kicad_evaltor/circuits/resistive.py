@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 
 
@@ -41,15 +41,36 @@ class DCSolution:
 
 
 class DCNetwork:
-    def __init__(self, resistors: Iterable[Resistor]) -> None:
+    """Resistors between named nodes, with optional stop nodes.
+
+    ``stops`` are nodes that :meth:`component` reaches but does not walk
+    through, normally the supply and ground rails: a pull-up from one signal
+    to ``+3V3`` and another from a second signal to the same rail do not make
+    the two signals one resistor network. :meth:`equivalent_resistance` treats
+    a stop node other than its two endpoints as open.
+    """
+
+    def __init__(self, resistors: Iterable[Resistor], *, stops: Iterable[str] = ()) -> None:
         self.resistors = tuple(resistors)
+        self.stops = frozenset(stops)
         refs = [r.reference for r in self.resistors]
         if len(refs) != len(set(refs)):
             raise ValueError("Resistor references must be unique")
 
     @classmethod
-    def from_netlist(cls, netlist, references: Iterable[str]) -> DCNetwork:
-        """Read only explicitly selected parts; never infer a whole circuit model."""
+    def from_netlist(
+        cls,
+        netlist,
+        references: Iterable[str],
+        *,
+        stop_at: Callable[..., bool] | None = None,
+    ) -> DCNetwork:
+        """Read only explicitly selected parts; never infer a whole circuit model.
+
+        ``stop_at`` is a net predicate such as
+        :func:`kicad_evaltor.connectivity.power_rails`; every net of a selected
+        resistor that it accepts becomes one of the network's ``stops``.
+        """
         from kicad_evaltor.values import parse_quantity
 
         resistors = []
@@ -64,7 +85,13 @@ class DCNetwork:
                     f"Cannot model {ref}: expected two connected pins and a resistance"
                 )
             resistors.append(Resistor(ref, pins[0].net, pins[1].net, quantity.value))
-        return cls(resistors)
+        stops: set[str] = set()
+        if stop_at is not None:
+            for name in {n for r in resistors for n in (r.a, r.b)}:
+                net = netlist.net(name)
+                if net is not None and stop_at(net):
+                    stops.add(name)
+        return cls(resistors, stops=stops)
 
     def solve(
         self, fixed: Mapping[str, float], *, injected: Mapping[str, float] | None = None
@@ -177,27 +204,59 @@ class DCNetwork:
         return DCSolution(voltages, currents, powers)
 
     def equivalent_resistance(self, a: str, b: str) -> float:
+        """The resistance between nodes ``a`` and ``b`` with nothing else driven.
+
+        Only the part of the network reached from ``a`` is solved, walking no
+        further than the ``stops``. A resistor ending on a stop node other than
+        ``a`` and ``b`` carries no current here, so a pull-up to an unrelated
+        rail neither adds a path nor links two signals.
+        """
         if a == b:
             return 0.0
-        network = self.component(a)
+        open_stops = self.stops - {a, b}
+        network = self.component(a, stop_at=self.stops - {a})
+        network = DCNetwork(
+            (r for r in network.resistors if r.a not in open_stops and r.b not in open_stops),
+            stops=network.stops,
+        )
         if b not in {n for r in network.resistors for n in (r.a, r.b)}:
             raise NetworkUnavailable(f"No resistor path from {a} to {b}")
         result = network.solve({b: 0.0}, injected={a: 1.0})
         return result.voltages[a]
 
-    def component(self, node: str) -> DCNetwork:
-        """The electrically connected subset containing a node."""
+    def component(
+        self, node: str, *, stop_at: Collection[str] | Callable[[str], bool] | None = None
+    ) -> DCNetwork:
+        """The electrically connected subset containing a node.
+
+        The walk takes every resistor touching a reached node, and goes on
+        from the far end unless that end is a stop: a node in ``stop_at`` (a
+        collection of node names or a predicate on one), or by default in the
+        network's own ``stops``. ``node`` itself is always walked from. Stop
+        nodes that were reached stay in the result, as its ``stops``.
+        """
+        if stop_at is None:
+            stop_at = self.stops
+        is_stop = stop_at if callable(stop_at) else stop_at.__contains__
         reached = {node}
+        expand = [node]
+        stopped: set[str] = set()
         chosen: dict[str, Resistor] = {}
-        changed = True
-        while changed:
-            changed = False
+        while expand:
+            here = expand.pop()
             for r in self.resistors:
-                if r.reference not in chosen and (r.a in reached or r.b in reached):
-                    chosen[r.reference] = r
-                    reached.update((r.a, r.b))
-                    changed = True
-        return DCNetwork(chosen.values())
+                if r.reference in chosen or here not in (r.a, r.b):
+                    continue
+                chosen[r.reference] = r
+                for end in (r.a, r.b):
+                    if end in reached:
+                        continue
+                    reached.add(end)
+                    if is_stop(end):
+                        stopped.add(end)
+                    else:
+                        expand.append(end)
+        return DCNetwork(chosen.values(), stops=stopped)
 
     def corners(
         self,
@@ -219,7 +278,10 @@ class DCNetwork:
         for signs in itertools.product((-1, 1), repeat=len(varied)):
             factors = {ref: 1 + sign * tolerances[ref] for ref, sign in zip(varied, signs)}
             network = DCNetwork(
-                Resistor(r.reference, r.a, r.b, r.ohms * factors.get(r.reference, 1))
-                for r in self.resistors
+                (
+                    Resistor(r.reference, r.a, r.b, r.ohms * factors.get(r.reference, 1))
+                    for r in self.resistors
+                ),
+                stops=self.stops,
             )
             yield network.solve(fixed, injected=injected)

@@ -1,0 +1,169 @@
+{
+ "$schema": "https://schemas.kicad.org/erc.v1.json",
+ "coordinate_units": "mm",
+ "ignored_checks": [
+  {
+   "description": "Global label only appears once in the schematic",
+   "key": "single_global_label"
+  },
+  {
+   "description": "Four connection points are joined together",
+   "key": "four_way_junction"
+  },
+  {
+   "description": "Assigned footprint doesn't match footprint filters",
+   "key": "footprint_filter"
+  }
+ ],
+ "included_severities": [
+  "error",
+  "warning",
+  "exclusion"
+ ],
+ "kicad_version": "10.0.7",
+ "sheets": [
+  {
+   "path": "/",
+   "uuid_path": "/dc6ee4e3-04cb-5fc4-81c6-c83da3a8176b",
+   "violations": [
+    {
+     "description": "The current configuration does not include the footprint library 'Logger'",
+     "items": [
+      {
+       "description": "Symbol D3 [LED]",
+       "pos": {
+        "x": 69.85,
+        "y": 195.58
+       },
+       "uuid": "99b2abab-2dcd-5947-8484-16d8bc796e83"
+      }
+     ],
+     "severity": "warning",
+     "type": "footprint_link_issues"
+    },
+    {
+     "description": "The current configuration does not include the symbol library 'Logger'",
+     "items": [
+      {
+       "description": "Symbol D3 [LED]",
+       "pos": {
+        "x": 69.85,
+        "y": 195.58
+       },
+       "uuid": "99b2abab-2dcd-5947-8484-16d8bc796e83"
+      }
+     ],
+     "severity": "warning",
+     "type": "lib_symbol_issues"
+    },
+    {
+     "description": "Pins of type Bidirectional and Power output are connected",
+     "items": [
+      {
+       "description": "Symbol U5 Pin 1 [SDO/SA0, Bidirectional, Line]",
+       "pos": {
+        "x": 213.36,
+        "y": 182.88
+       },
+       "uuid": "75df331c-cbb8-4daa-a091-184079067790"
+      },
+      {
+       "description": "Symbol #FLG06 Pin 1 [Power output, Line]",
+       "pos": {
+        "x": 45.72,
+        "y": 96.52
+       },
+       "uuid": "706d42d9-6ca1-4047-9be1-8d5ec47c95b5"
+      }
+     ],
+     "severity": "warning",
+     "type": "pin_to_pin"
+    },
+    {
+     "description": "Pins of type Bidirectional and Power output are connected",
+     "items": [
+      {
+       "description": "Symbol U5 Pin 2 [SDX, Bidirectional, Line]",
+       "pos": {
+        "x": 213.36,
+        "y": 185.42
+       },
+       "uuid": "c66ec277-c0ce-4822-9629-11c4e03a1be6"
+      },
+      {
+       "description": "Symbol #FLG06 Pin 1 [Power output, Line]",
+       "pos": {
+        "x": 45.72,
+        "y": 96.52
+       },
+       "uuid": "706d42d9-6ca1-4047-9be1-8d5ec47c95b5"
+      }
+     ],
+     "severity": "warning",
+     "type": "pin_to_pin"
+    },
+    {
+     "description": "The current configuration does not include the footprint library 'Logger'",
+     "items": [
+      {
+       "description": "Symbol D2 [LED]",
+       "pos": {
+        "x": 215.9,
+        "y": 99.06
+       },
+       "uuid": "0a0c007a-fca4-5dce-a755-37f7dca340c1"
+      }
+     ],
+     "severity": "warning",
+     "type": "footprint_link_issues"
+    },
+    {
+     "description": "The current configuration does not include the symbol library 'Logger'",
+     "items": [
+      {
+       "description": "Symbol D2 [LED]",
+       "pos": {
+        "x": 215.9,
+        "y": 99.06
+       },
+       "uuid": "0a0c007a-fca4-5dce-a755-37f7dca340c1"
+      }
+     ],
+     "severity": "warning",
+     "type": "lib_symbol_issues"
+    },
+    {
+     "description": "The current configuration does not include the footprint library 'Logger'",
+     "items": [
+      {
+       "description": "Symbol D1 [LED]",
+       "pos": {
+        "x": 215.9,
+        "y": 109.22
+       },
+       "uuid": "64a5e213-0ace-59db-8d3c-ed2cc2632fcd"
+      }
+     ],
+     "severity": "warning",
+     "type": "footprint_link_issues"
+    },
+    {
+     "description": "The current configuration does not include the symbol library 'Logger'",
+     "items": [
+      {
+       "description": "Symbol D1 [LED]",
+       "pos": {
+        "x": 215.9,
+        "y": 109.22
+       },
+       "uuid": "64a5e213-0ace-59db-8d3c-ed2cc2632fcd"
+      }
+     ],
+     "severity": "warning",
+     "type": "lib_symbol_issues"
+    }
+   ]
+  }
+ ],
+ "source": "imu.kicad_sch"
+}

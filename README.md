@@ -332,6 +332,13 @@ genuinely overlaps. The remaining checks answer "is this drawn on that", so they
 take no clearance, and take a `margin` if the measurement noise of sampled
 outlines and bare pin lines needs hiding.
 
+To ignore shallow overlaps, set `min_overlap_mm`: a pair counts only when the
+boxes as drawn share at least that much width and height. It replaces a negative
+`margin` rather than adding to it (setting both is an error). A suite that used
+`margin=m` and then dropped overlaps narrower than `w` converts to
+`min_overlap_mm = w - 2*m`; `margin=-0.2` with a 0.6mm filter is
+`min_overlap_mm=1.0`.
+
 ```json
 {
   "first": "SW2.Value", "first_kind": "text", "first_properties": {"Value": "SW_Push"},
@@ -382,7 +389,7 @@ fails outright. Reusable selectors are available for
 custom checks:
 
 ```python
-from kicad_evaltor.selectors import select
+from kicad_evaltor.selection import select
 
 resistors = select(ctx.sheet_symbols(), "R*", key=lambda s: s.reference)
 resistors.require_count(minimum=1, maximum=20)
@@ -410,9 +417,76 @@ requires every schematic component intended for the board.
 
 Decoupling proximity is evaluated per power pin. It measures planar placement,
 not actual routed loop length, capacitor electrical suitability, or inductance.
-Pad-to-pad route length supports straight-track endpoint and via landings;
-interior arc joins, intermediate pad bridges, and filled-zone paths are not
-modeled. Use KiCad routing completeness checks for general copper connectivity.
+Pad-to-pad route length supports straight-track endpoint and via landings, and
+crosses the copper of pads on the net (a route that flows through an ESD part's
+pads), costing the straight distance between landings. Interior arc joins and
+filled-zone paths are not modeled; `measure_route` says why a route could not be
+measured. Use KiCad routing completeness checks for general copper connectivity.
+
+### Querying parts, nets and findings
+
+These helpers return facts with the evidence behind them; the pass/fail rule
+stays in your test.
+
+```python
+from kicad_evaltor import (
+    CircuitQueries,
+    DRCRunCheck,
+    ERCRunCheck,
+    any_of,
+    find_part,
+    led_colors,
+    measure_path_length,
+    pins_named,
+    quantity_of,
+    series_parts,
+)
+
+netlist = ctx.schematic.get_netlist()
+usb = find_part(netlist, "", markers=("USB_C",), required_pins=("CC1", "CC2", "D+", "D-"))
+chg = pins_named(netlist, find_part(netlist, "BQ24074").ref, "CHG")[0]  # ~{CHG}, /CHG, nCHG
+gnd = netlist.net_named("GND")  # /GND, /power/GND
+
+q = CircuitQueries(netlist)
+q.resistance_between(("U3", "12"), "GND").ohms  # series chain, stops at rails
+q.strapped(("U1", "8"), ["GND", "+3V3"], max_ohms=100e3)
+merged = netlist.merged(any_of(series_parts("R", max_ohms=0), series_parts("FB")))
+
+quantity_of(netlist.components["L1"], "inductance")  # Value, Description, then fields
+{c.color for c in led_colors(netlist.components["D1"])}
+
+# A signal through a series resistor, net by net, with KiCad's net totals
+measure_path_length(board, geometry, "U4.5", "D3.2", through=["R14"])
+
+# ERC/DRC findings carry pin types, lib ids, origin and owners
+erc = ERCRunCheck(severity="all").run(ctx)
+real = [f for f in erc.details.get("violations", []) if f["origin"] == "design"]
+DRCRunCheck(severity="error", exclude_owned_by=["J1"])  # J1's own findings only
+DRCRunCheck(severity="all", reset_severities=True, drop_exclusions=True)  # hidden_by
+```
+
+Part numbers can be checked against distributor catalogues with the optional
+`kicad-evaltor[sourcing]` extra:
+
+```python
+from kicad_evaltor.sourcing import PartRule, SourcingCheck
+
+SourcingCheck(
+    fields={"LCSC": "lcsc"},
+    rules=[PartRule(reference="R*", category=("Resistor",), dimension="resistance")],
+)
+```
+
+To check exactly what a BOM lists, through-hole parts included, pass it in;
+the symbol flags and `exclude` then only say which parts the BOM should list:
+
+```python
+SourcingCheck(
+    bom_path="out/bom.csv",  # or bom=read_bom(...) rows, or bom=["R1", "C2-C4"]
+    bom_fields={"LCSC Part": "lcsc"},  # read numbers from the BOM, not the symbols
+    bom_complete=True,  # also fail fitted parts the BOM leaves out
+)
+```
 
 ## Custom checks
 
@@ -469,8 +543,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions, and
 
 - [Architecture](docs/architecture.md) — how parsing, geometry and the check
   registry fit together.
-- [PCB evaluation](docs/pcb-plan.md) — the decisions behind the board checks,
-  and what is still open.
 - [Contributing](CONTRIBUTING.md) — setup, gates, and conventions.
 
 ## License
