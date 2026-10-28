@@ -135,7 +135,26 @@ def _exit_status(code: int) -> str:
     return f"exit code {code}"
 
 
+# Only a POSIX kicad-cli dies by a signal, but the report may be read anywhere,
+# and Windows' ``signal`` module lacks most of these (SIGKILL, SIGSEGV's peers).
+_POSIX_SIGNALS = {
+    1: "SIGHUP",
+    2: "SIGINT",
+    3: "SIGQUIT",
+    4: "SIGILL",
+    6: "SIGABRT",
+    7: "SIGBUS",
+    8: "SIGFPE",
+    9: "SIGKILL",
+    11: "SIGSEGV",
+    13: "SIGPIPE",
+    15: "SIGTERM",
+}
+
+
 def _signal_name(number: int) -> str:
+    if number in _POSIX_SIGNALS:
+        return _POSIX_SIGNALS[number]
     try:
         return signal.Signals(number).name
     except ValueError:
