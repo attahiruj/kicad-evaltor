@@ -236,7 +236,7 @@ wheels = [
 
 [[package]]
 name = "kicad-evaltor"
-version = "0.6.0"
+version = "0.6.1"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -258,7 +258,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1" },
     { name = "types-requests", marker = "extra == 'dev'", specifier = ">=2.31" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "sourcing"]
 
 [[package]]
 name = "librt"

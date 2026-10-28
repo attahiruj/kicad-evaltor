@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kicad-evaltor"
-version = "0.6.0"
+version = "0.6.1"
 description = "Test and validate KiCad designs: schematic values, connectivity, ERC, DRC, board layout and fabrication outputs"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,6 +38,9 @@ dev = [
     "mypy>=1.7",
     "types-requests>=2.31",
 ]
+# Online part lookups (kicad_evaltor.sourcing) use only the standard library;
+# the extra exists so a caller can state the intent.
+sourcing = []
 
 [project.urls]
 Homepage = "https://github.com/attahiruj/kicad-evaltor"
@@ -56,6 +59,7 @@ testpaths = ["tests"]
 markers = [
     "integration: requires a running KiCad instance",
     "slow: tests that may take >30s",
+    "network: queries live distributor catalogues; runs only with KICAD_EVALTOR_LIVE_SOURCING=1",
 ]
 addopts = "-v --strict-markers"
 

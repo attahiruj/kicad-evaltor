@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-28
+
+### Fixed
+
+- kicad-cli and KiCad's Python start without `__GLX_VENDOR_LIBRARY_NAME`, which
+  makes kicad-cli 10.0.7 segfault when set to `nvidia` (`kicad_child_env`).
+- A failed DRC or ERC run names the exit code or signal, a timeout, and the last
+  stderr lines instead of `"DRC command failed: "`; `details` carry `returncode`,
+  `signal`, `timed_out`, `stderr` and `stdout`.
+- Pad-to-pad route lengths cross the copper of pads on the net, so a route that
+  flows through an in-line part's pads (USB D+/D- through an ESD array) measures
+  instead of returning None. `measure_route` says why a route cannot be measured
+  (start or end pad not reached, or the net's copper in N pieces) and lists the
+  pads it crossed; `through_pads=False` keeps the track/via-only graph.
+  `TraceLengthCheck` reports the same reason.
+- `TextOffBoardCheck` checks the printed ink (KiCad's stroked text shape) instead
+  of the text frame box, reports `overhang_mm` per text and takes `tolerance_mm`;
+  `method="bbox"` keeps the old test.
+- `NoConnectFloatingCheck` accepts a no-connect flag at the end of a wire stub
+  drawn from a single pin, as KiCad ERC does (`allow_wire_stub=True`). A stub
+  reaching several pins, a label or a power symbol is still reported.
+- `MountingHolesCheck` matches the default `"*MountingHole*"` against the
+  footprint name with and without its library nickname.
+- `FootprintMatchesSchematicCheck` gives each mismatch a `kind` (`missing`,
+  `name`, `nickname_only`, `pads`); `ignore_library_nickname=True` lists
+  nickname-only differences under `ignored`. Pad mismatches always fail.
+- `kicad_evaltor.selectors` is now `kicad_evaltor.selection`: a module named
+  `selectors.py` shadowed the standard library's whenever Python started inside
+  the package directory. The old import path still works as an alias.
+
+### Added
+
+- Board checks: `MountingHolesCheck(match_drill_min_mm=, max_edge_distance_mm=)`;
+  `BoardOutlineCheck` reports every outer corner's radius and takes
+  `corner_radius_mm`; `DecouplingCoverageCheck` lists supply pins with no grounded
+  capacitor in reach and capacitors near no covered pin on their rail. It judges
+  only capacitors on the covered pins' supplies (or `supply_nets=`), so RC-delay
+  and filter caps are left alone; `bridge=` (`{"R": 0, "FB": None}` or a bridge)
+  treats nets joined by 0R links or ferrites as one supply; and `serves=` names
+  pins a capacitor may sit next to without those pins needing one.
+- `measure_path_length` measures a signal across series parts, net by net, with
+  KiCad's whole-net totals alongside. It reports the pads' `start_net` /
+  `end_net` even when no path is found, and `expect_nets=` refuses to measure a
+  board whose pads sit on other nets than the schematic says.
+- `kicad_evaltor.footprint_library`: stock footprints resolved by bare name
+  across stock libraries and `fp-lib-table`, `compare_copper` /
+  `compare_to_library` (with `allow_flipped`), and `chip_size_from_copper`
+  (stock chip resistors, capacitors and inductors, so 1008 and 1210 inductors
+  size too).
+- Overlap checks take `min_overlap_mm` and report `overlap_width_mm` /
+  `overlap_height_mm` on every box finding. A negative `margin` `m` with an
+  overlap filter `w` converts to `min_overlap_mm = w - 2*m`.
+- `wire_groups(join_mid_wire=False)` follows KiCad's rule that a T needs a
+  junction; `label_only_links` lists parts sharing a net with no drawn wire
+  between them.
+- Netlist helpers: `FileNetlist.net_named(name, any_sheet=True)` (raises
+  `AmbiguousNet`), `FileNetlist.merged(bridge)` with the merged-to-raw name map,
+  and `series_parts(..., max_ohms=)`.
+- `DCNetwork.from_netlist(..., stop_at=)` stops resistor networks at rails;
+  `CircuitQueries.resistance_between` and `CircuitQueries.strapped` measure
+  pull-ups, straps and series chains with the chain as evidence.
+- `kicad_evaltor.parts`: `find_part` (by name stem, value or marker text, with
+  required pins), `pins_named` (spelling variants, then the stock symbol's pad
+  number), `signal_pins`, `fields_matching` / `text_of`, and `led_colors` (colour
+  words and wavelengths). `quantity_of` reads a value from Value, Description or
+  any field, ignoring tolerance and rating text.
+- Structured ERC/DRC findings: each item gains `kind`, `reference`, `pin`,
+  `pin_name`, `pin_type` (and `lib_id` for ERC symbols), and each finding an
+  `origin` of `environment` (library configuration) or `design`.
+  `findings_owned_by` and `exclude_owned_by=` keep findings whose every item
+  belongs to the given parts. An unconnected item is never owned: KiCad picks
+  its two ends afresh on each run, and one between two pads of the same part is
+  still an unrouted net. `SchematicParityCheck` findings gain `reference`
+  and `tags` (`board_only_mechanical`, `nickname_only`, `field_only`).
+- `ERCRunCheck` / `DRCRunCheck(reset_severities=True, drop_exclusions=True,
+  severity_overrides={...})` run on a temporary copy of the project and tag each
+  finding the project had silenced with `hidden_by`.
+- `kicad_evaltor.sourcing` (`kicad-evaltor[sourcing]`, no new dependencies):
+  exact-number lookups in LCSC/JLCPCB, Digi-Key and Mouser as one `PartRecord`,
+  caller `PartRule`s for `catalogue_mismatch`, and `SourcingCheck`. An unreachable
+  catalogue is an ERROR naming the platform, never a missing part. Given a BOM
+  (`bom=` rows or references, or `bom_path=`), it checks exactly the listed parts,
+  through-hole included, can read part numbers from BOM columns (`bom_fields=`),
+  and reports BOM references missing from the design (fail) and fitted parts
+  missing from the BOM (fail with `bom_complete=True`). Digi-Key and
+  Mouser are built from their published API specifications and not yet verified
+  against live responses.
+
 ## [0.6.0] - 2026-10-22
 
 ### Added
@@ -448,7 +536,9 @@ First public release.
 - KiCad dependencies are not pinned per check version, so ERC and DRC output
   shape can shift between KiCad releases.
 
-[Unreleased]: https://github.com/attahiruj/kicad-evaltor/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/attahiruj/kicad-evaltor/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/attahiruj/kicad-evaltor/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/attahiruj/kicad-evaltor/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/attahiruj/kicad-evaltor/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/attahiruj/kicad-evaltor/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/attahiruj/kicad-evaltor/compare/v0.2.0...v0.3.0
